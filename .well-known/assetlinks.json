@@ -1,0 +1,10 @@
+[{
+  "relation": ["delegate_permission/common.handle_all_urls"],
+  "target": {
+    "namespace": "android_app",
+    "package_name": "com.noonchi.app",
+    "sha256_cert_fingerprints": [
+      "89:E0:4C:66:7D:63:AD:41:A3:E2:EA:A6:6B:BF:87:A5:31:58:BD:4B:DA:46:91:F6:3B:28:98:42:E3:57:26:BE"
+    ]
+  }
+}]
