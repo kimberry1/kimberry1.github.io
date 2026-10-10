@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>블라인드 서울</title>
-<meta name="description" content="몇 년도인지 모르는 채 종잣돈 1억으로 서울 아파트·빌라에 60개월 동안 투자하는 게임">
+<meta name="description" content="몇 년도인지 모르는 채 종잣돈 10억으로 서울 아파트·빌라에 60개월 동안 투자하는 게임">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
@@ -18,10 +18,10 @@
       <span class="turn" id="turn-label">0 / 60개월</span>
     </div>
     <div class="stats">
-      <div class="stat"><span class="k">현금</span><span class="v num" id="s-cash">1억</span></div>
-      <div class="stat"><span class="k">순자산</span><span class="v num" id="s-net">1억</span></div>
+      <div class="stat"><span class="k">현금</span><span class="v num" id="s-cash">10억</span></div>
+      <div class="stat"><span class="k">순자산</span><span class="v num" id="s-net">10억</span></div>
       <div class="stat"><span class="k">대출 금리</span><span class="v num" id="s-rate">4.00%</span></div>
-      <div class="stat"><span class="k">LTV 한도</span><span class="v num" id="s-ltv">60%</span></div>
+      <div class="stat opt"><span class="k">LTV 한도</span><span class="v num" id="s-ltv">60%</span></div>
     </div>
   </div>
   <div class="months" id="months" aria-hidden="true"></div>
@@ -31,16 +31,30 @@
   <details class="howto" id="howto">
     <summary><span>게임 방법</span><span class="howto-toggle" aria-hidden="true"></span></summary>
     <ul>
-      <li><b>목표:</b> 종잣돈 1억으로 60개월 동안 서울 아파트·빌라에 투자합니다. 끝날 때의 순자산(현금 + 집값 − 대출 − 보증금)이 점수입니다.</li>
-      <li><b>몇 년도인지 모릅니다:</b> 1986~2025년 중 무작위로 고른 60개월의 시세 흐름을 따릅니다. 시작 가격과 시작 금리(4%)는 매판 같아서 연도는 게임이 끝나야 공개됩니다.</li>
+      <li><b>목표:</b> 종잣돈 10억으로 60개월 동안 서울 아파트·빌라에 투자합니다. 끝날 때의 순자산(현금 + 집값 − 대출 − 보증금)이 점수입니다.</li>
+      <li><b>몇 년도인지 모릅니다:</b> 1986~2025년 중 무작위로 고른 60개월의 시세 흐름을 따릅니다. 시작 가격(2025년 수준 시세)과 시작 금리(4%)는 매판 같아서 연도는 게임이 끝나야 공개됩니다.</li>
       <li><b>매물:</b> 지금 현금으로 살 수 있는 매물만 나옵니다(대출 한도까지 받는다고 가정). 하나를 사면 남은 현금에 맞춰 새 매물이 채워집니다.</li>
       <li><b>세입자:</b> 집을 사면 전세나 월세 세입자를 구합니다. 전세 보증금이 들어오면 대출부터 갚습니다. 못 구하면 대출 이자만 나갑니다.</li>
       <li><b>만기:</b> 계약은 2년입니다. 세입자가 나가는데 다음 세입자를 못 구하면 보증금을 현금으로 돌려줘야 합니다. 전세 시세가 떨어지면 재계약 때 차액을 돌려줍니다(역전세).</li>
       <li><b>매도:</b> 내놓는다고 바로 팔리지 않습니다. 매달 체결 확률에 따라 팔리고, 하락장일수록 잘 안 팔립니다. 급매로 내놓으면 빨리 팔립니다.</li>
       <li><b>경매:</b> 현금이 마이너스인 채로 3개월이 지나면 빚이 가장 많은 집이 시세 70%에 경매로 넘어갑니다.</li>
-      <li><b>세금:</b> 취득세 1주택 1% · 2주택 3% · 3주택 8% · 4주택 이상 12%. 양도세 1년 미만 70% · 2년 미만 60% · 이후 기본세율. 1주택을 2년 넘게 보유하면 비과세. 보유세는 12개월마다 냅니다.</li>
+      <li><b>세금:</b> 취득세는 2주택까지 6억 이하 1% · 9억 이하 2% · 초과 3%, 3주택 8%, 4주택 이상 12%. 양도세는 1년 미만 70% · 2년 미만 60% · 이후 기본세율이고, 1주택을 2년 넘게 보유하면 12억까지 비과세입니다. 보유세(재산세·종부세)는 12개월마다 내며 다주택일수록 무겁습니다.</li>
     </ul>
   </details>
+
+  <section class="panel market-panel">
+    <div class="panel-head"><h2>시세판</h2><span class="aside">시작 시점 = 100</span></div>
+    <div class="market-layout">
+      <div class="market-chart-col">
+        <div class="legend">
+          <span><i style="background: var(--series-gn)"></i>강남 아파트</span>
+          <span><i style="background: var(--series-gb)"></i>강북 아파트</span>
+        </div>
+        <div class="chart" id="market-chart"></div>
+      </div>
+      <div id="market"></div>
+    </div>
+  </section>
 
   <div class="grid">
     <div class="col">
@@ -51,15 +65,6 @@
       </section>
     </div>
     <div class="col">
-      <section class="panel">
-        <div class="panel-head"><h2>시세판</h2><span class="aside">시작 시점 = 100</span></div>
-        <div class="legend">
-          <span><i style="background: var(--series-gn)"></i>강남 아파트</span>
-          <span><i style="background: var(--series-gb)"></i>강북 아파트</span>
-        </div>
-        <div class="chart" id="market-chart"></div>
-        <div id="market"></div>
-      </section>
       <section class="panel">
         <div class="panel-head"><h2>이번 달 매물</h2><span class="aside" id="listings-aside"></span></div>
         <div class="listings" id="listings"></div>

@@ -10,7 +10,7 @@
   if (!DATA && typeof require === 'function') DATA = require('./data.js');
 
   var CONFIG = {
-    startCash: 1e8,
+    startCash: 10e8,
     turns: 60,
     history: 3,            // 시작 전 추세 계산용 개월 수
     baseRate: 4.0,         // 시작 금리 고정 (실제 금리는 변동 폭만 반영)
@@ -27,26 +27,38 @@
     arrearsLimit: 3,
     auctionRatio: 0.7,
     penaltyRate: 12,       // 연체 이자율 (연 %)
-    listingCount: 4,
+    listingCount: 6,
     maxEventsPerTurn: 2
   };
 
   var KINDS = {
-    'gn-apt':   { region: 'gn', type: 'apt',   label: '강남 아파트', base: 2.0e8, jeonseRatio: 0.55, sale: 1.0,  tenant: 1.0, rentDefault: 0.008, repair: 1.0 },
-    'gb-apt':   { region: 'gb', type: 'apt',   label: '강북 아파트', base: 1.2e8, jeonseRatio: 0.65, sale: 1.0,  tenant: 1.0, rentDefault: 0.008, repair: 1.0 },
-    'gn-villa': { region: 'gn', type: 'villa', label: '강남 빌라',   base: 0.9e8, jeonseRatio: 0.75, sale: 0.55, tenant: 0.8, rentDefault: 0.018, repair: 1.6 },
-    'gb-villa': { region: 'gb', type: 'villa', label: '강북 빌라',   base: 0.6e8, jeonseRatio: 0.80, sale: 0.55, tenant: 0.8, rentDefault: 0.018, repair: 1.6 }
+    // base: 동네 계수 1.0 기준 시작 시세 (아파트 전용 84㎡ 준신축, 빌라 52㎡ 구축)
+    'gn-apt':   { region: 'gn', type: 'apt',   label: '강남 아파트', base: 15e8,  jeonseRatio: 0.45, sale: 1.0,  tenant: 1.0, rentDefault: 0.008, repair: 1.0 },
+    'gb-apt':   { region: 'gb', type: 'apt',   label: '강북 아파트', base: 9e8,   jeonseRatio: 0.55, sale: 1.0,  tenant: 1.0, rentDefault: 0.008, repair: 1.0 },
+    'gn-villa': { region: 'gn', type: 'villa', label: '강남 빌라',   base: 4.5e8, jeonseRatio: 0.72, sale: 0.55, tenant: 0.8, rentDefault: 0.018, repair: 1.6 },
+    'gb-villa': { region: 'gb', type: 'villa', label: '강북 빌라',   base: 3e8,   jeonseRatio: 0.78, sale: 0.55, tenant: 0.8, rentDefault: 0.018, repair: 1.6 }
   };
   var KIND_ORDER = ['gn-apt', 'gb-apt', 'gn-villa', 'gb-villa'];
   var REGION_LABEL = { gn: '강남', gb: '강북' };
   var TYPE_LABEL = { apt: '아파트', villa: '빌라' };
 
+  // 동네 계수 f: 아파트 시세 배수. 빌라는 격차를 절반만, 전세는 70%만 반영한다 (비싼 동네일수록 전세가율이 낮다).
   var DONGS = {
-    gn: ['강남구 대치동', '강남구 개포동', '서초구 반포동', '서초구 방배동', '송파구 잠실동', '송파구 가락동',
-      '강동구 명일동', '양천구 목동', '영등포구 여의도동', '동작구 사당동', '관악구 봉천동', '강서구 화곡동'],
-    gb: ['도봉구 창동', '도봉구 쌍문동', '노원구 상계동', '노원구 중계동', '강북구 미아동', '성북구 길음동',
-      '마포구 아현동', '용산구 이촌동', '성동구 금호동', '광진구 자양동', '은평구 불광동', '중랑구 면목동']
+    gn: [
+      { name: '서초구 반포동', f: 2.2 }, { name: '강남구 대치동', f: 1.8 }, { name: '강남구 개포동', f: 1.75 },
+      { name: '송파구 잠실동', f: 1.6 }, { name: '영등포구 여의도동', f: 1.4 }, { name: '서초구 방배동', f: 1.3 },
+      { name: '양천구 목동', f: 1.2 }, { name: '송파구 가락동', f: 1.0 }, { name: '강동구 명일동', f: 0.9 },
+      { name: '동작구 사당동', f: 0.75 }, { name: '관악구 봉천동', f: 0.6 }, { name: '강서구 화곡동', f: 0.55 }
+    ],
+    gb: [
+      { name: '용산구 이촌동', f: 2.2 }, { name: '마포구 아현동', f: 1.75 }, { name: '성동구 금호동', f: 1.6 },
+      { name: '광진구 자양동', f: 1.3 }, { name: '성북구 길음동', f: 1.0 }, { name: '은평구 불광동', f: 0.9 },
+      { name: '노원구 중계동', f: 0.85 }, { name: '도봉구 창동', f: 0.85 }, { name: '강북구 미아동', f: 0.85 },
+      { name: '노원구 상계동', f: 0.75 }, { name: '중랑구 면목동', f: 0.75 }, { name: '도봉구 쌍문동', f: 0.65 }
+    ]
   };
+  function dongPriceF(type, d) { return type === 'apt' ? d.f : 1 + (d.f - 1) * 0.5; }
+  function dongJeonseF(type, d) { return 1 + (dongPriceF(type, d) - 1) * 0.7; }
   var SIZES = {
     apt: [{ m2: 59, py: '25평형', f: 0.8 }, { m2: 84, py: '34평형', f: 1.0 }, { m2: 114, py: '45평형', f: 1.35 }],
     villa: [{ m2: 40, py: '15평', f: 0.8 }, { m2: 52, py: '19평', f: 1.0 }, { m2: 66, py: '24평', f: 1.25 }]
@@ -248,11 +260,20 @@
 
   /* ---------- 세금 ---------- */
 
-  function acqTaxRate(count) {
-    if (count <= 1) return 0.01;
-    if (count === 2) return 0.03;
+  // 취득세: 2주택까지는 가격 구간(6억 이하 1% · 9억 이하 2% · 초과 3%), 3주택 8%, 4주택 이상 12%
+  function acqTaxRate(count, price) {
+    if (count >= 4) return 0.12;
     if (count === 3) return 0.08;
-    return 0.12;
+    if (price <= 6e8) return 0.01;
+    if (price <= 9e8) return 0.02;
+    return 0.03;
+  }
+
+  // 보유세(재산세 + 종부세) 연간: 시세 0.15% + 종부세 기준 초과분 (1주택 18억 초과 0.6%, 다주택 13억 초과 1.5%)
+  function holdingTax(st) {
+    var total = st.props.reduce(function (a, p) { return a + value(st, p); }, 0);
+    var multi = st.props.length >= 2;
+    return money(total * 0.0015 + Math.max(0, total - (multi ? 13e8 : 18e8)) * (multi ? 0.015 : 0.006));
   }
 
   var BRACKETS = [[14e6, 0.06], [50e6, 0.15], [88e6, 0.24], [150e6, 0.35], [300e6, 0.38], [500e6, 0.40], [1e9, 0.42], [Infinity, 0.45]];
@@ -270,7 +291,14 @@
     var gain = salePrice - fee - p.buyPrice - p.buyCosts;
     var held = st.turn - p.buyT;
     if (gain <= 0) return { tax: 0, label: '양도차익 없음', gain: gain };
-    if (st.props.length === 1 && held >= 24) return { tax: 0, label: '1주택 2년 보유 비과세', gain: gain };
+    if (st.props.length === 1 && held >= 24) {
+      if (salePrice <= 12e8) return { tax: 0, label: '1주택 2년 보유 비과세', gain: gain };
+      // 고가주택: 12억 초과분 비율만큼만 과세, 장기보유특별공제 연 8% (최대 80%)
+      var yrs = Math.floor(held / 12);
+      var ded1 = Math.min(0.8, yrs >= 3 ? yrs * 0.08 : 0);
+      var taxable = gain * (salePrice - 12e8) / salePrice * (1 - ded1);
+      return { tax: money(progressive(taxable)), label: '1주택 12억 초과분 과세' + (ded1 ? ' (장기보유공제 ' + Math.round(ded1 * 100) + '%)' : ''), gain: gain };
+    }
     if (held < 12) return { tax: money(gain * 0.7), label: '1년 미만 단기 70%', gain: gain };
     if (held < 24) return { tax: money(gain * 0.6), label: '2년 미만 단기 60%', gain: gain };
     var years = Math.floor(held / 12);
@@ -293,22 +321,27 @@
 
   /* ---------- 매물 ---------- */
 
-  function makeListing(st, kind, tag, size, age) {
+  function estPrice(st, kind, dong, size, age) {
+    var k = KINDS[kind];
+    var pk = k.region + (k.type === 'apt' ? 'Apt' : 'Villa');
+    return k.base * S(st, pk, st.turn) / S(st, pk, 0) * dongPriceF(k.type, dong) * size.f * age.f;
+  }
+
+  function makeListing(st, kind, tag, dong, size, age) {
     var k = KINDS[kind];
     var t = st.turn;
+    dong = dong || pick(st, DONGS[k.region]);
     size = size || pick(st, SIZES[k.type]);
     age = age || pick(st, AGES[k.type]);
-    var noise = uni(st, 0.95, 1.05);
-    var pk = k.region + (k.type === 'apt' ? 'Apt' : 'Villa');
-    var fair = money(k.base * S(st, pk, t) / S(st, pk, 0) * size.f * age.f * noise);
+    var fair = money(estPrice(st, kind, dong, size, age) * uni(st, 0.95, 1.05));
     // 규제·사건 효과(modMult)는 jeonseValue에서 적용하므로 여기서는 원래 시세만 저장한다
     var jeonse = money(k.base * k.jeonseRatio * S(st, k.region + 'J', t) / S(st, k.region + 'J', 0) *
-      size.f * age.jf * uni(st, 0.96, 1.04));
+      dongJeonseF(k.type, dong) * size.f * age.jf * uni(st, 0.96, 1.04));
     var disc = tag === '급매' ? uni(st, 0.85, 0.9) : tag === '경매' ? uni(st, 0.75, 0.85) : 1;
     return {
       id: 'L' + (st.nextId++),
       kind: kind, region: k.region, type: k.type,
-      dong: pick(st, DONGS[k.region]),
+      dong: dong.name,
       m2: size.m2, py: size.py, age: age.label,
       fair: fair, price: money(fair * disc), jeonse: Math.min(jeonse, money(fair * 0.92)),
       tag: tag || null,
@@ -318,7 +351,7 @@
 
   // 대출을 한도까지 받았을 때 매수에 필요한 최소 현금
   function minCash(st, price) {
-    return price + money(price * acqTaxRate(st.props.length + 1)) + money(price * CONFIG.buyFee) - down(price * ltv(st), 1e6);
+    return price + money(price * acqTaxRate(st.props.length + 1, price)) + money(price * CONFIG.buyFee) - down(price * ltv(st), 1e6);
   }
   function affordable(st, l) { return minCash(st, l.price) <= st.cash; }
 
@@ -330,16 +363,21 @@
     return arr;
   }
 
-  // 지금 현금으로 살 수 있는 평형·연식 조합 중 하나로 매물을 만든다. 없으면 null.
+  // 지금 현금으로 살 수 있는 동네·평형·연식 조합 중 하나로 매물을 만든다. 없으면 null.
   function makeAffordable(st, kind, tag) {
     var k = KINDS[kind];
+    var disc = tag === '급매' ? 0.9 : tag === '경매' ? 0.85 : 1;
     var combos = [];
-    SIZES[k.type].forEach(function (size) {
-      AGES[k.type].forEach(function (age) { combos.push([size, age]); });
+    DONGS[k.region].forEach(function (dong) {
+      SIZES[k.type].forEach(function (size) {
+        AGES[k.type].forEach(function (age) {
+          if (minCash(st, estPrice(st, kind, dong, size, age) * 0.95 * disc) <= st.cash) combos.push([dong, size, age]);
+        });
+      });
     });
     shuffle(st, combos);
-    for (var i = 0; i < combos.length; i++) {
-      var l = makeListing(st, kind, tag, combos[i][0], combos[i][1]);
+    for (var i = 0; i < combos.length && i < 12; i++) {
+      var l = makeListing(st, kind, tag, combos[i][0], combos[i][1], combos[i][2]);
       if (affordable(st, l)) return l;
     }
     return null;
@@ -352,7 +390,8 @@
       var k = KINDS[kind];
       var pk = k.region + (k.type === 'apt' ? 'Apt' : 'Villa');
       var f = Math.min.apply(null, SIZES[k.type].map(function (x) { return x.f; })) *
-        Math.min.apply(null, AGES[k.type].map(function (x) { return x.f; })) * 0.95;
+        Math.min.apply(null, AGES[k.type].map(function (x) { return x.f; })) *
+        Math.min.apply(null, DONGS[k.region].map(function (d) { return dongPriceF(k.type, d); })) * 0.95;
       best = Math.min(best, minCash(st, money(k.base * S(st, pk, st.turn) / S(st, pk, 0) * f)));
     });
     return best;
@@ -402,7 +441,7 @@
   function newGame(seed) {
     if (seed == null) seed = (Date.now() ^ Math.floor(Math.random() * 4294967296)) | 0;
     var st = {
-      version: 1,
+      version: 2,
       seed: seed, rng: seed,
       turn: 0, turns: CONFIG.turns,
       cash: CONFIG.startCash,
@@ -415,7 +454,7 @@
     st.startIdx = H + Math.floor(rand(st) * (DATA.months - CONFIG.turns - H));
     st.series = buildSeries(st);
     refreshListings(st);
-    st.report = { t: 0, ledger: [], items: [{ text: '종잣돈 1억으로 시작합니다. 몇 년도인지는 게임이 끝나야 공개됩니다.', tone: 'info' }] };
+    st.report = { t: 0, ledger: [], items: [{ text: '종잣돈 ' + fmt(CONFIG.startCash) + '으로 시작합니다. 몇 년도인지는 게임이 끝나야 공개됩니다.', tone: 'info' }] };
     st.hist.push({ t: 0, net: netWorth(st), cash: st.cash });
     return st;
   }
@@ -466,7 +505,7 @@
     var l = st.listings.filter(function (x) { return x.id === listingId; })[0];
     if (!l) return null;
     var count = st.props.length + 1;
-    var taxRate = acqTaxRate(count);
+    var taxRate = acqTaxRate(count, l.price);
     var tax = money(l.price * taxRate);
     var fee = money(l.price * CONFIG.buyFee);
     var loanMax = down(l.price * ltv(st), 1e6);
@@ -592,7 +631,7 @@
     p.noRenew = false;
     if (!p.seeking) p.seeking = { kind: kind, ask: 'market' };
     if (rand(st) < 0.12) {
-      var cost = money(value(st, p) * uni(st, 0.005, 0.02) * KINDS[p.kind].repair);
+      var cost = money(p.m2 * uni(st, 1e4, 4e4) * KINDS[p.kind].repair);
       st.cash -= cost;
       ledger(rep, '수리비', -cost);
       note(st, rep, propName(p) + ': 퇴거 후 집 상태가 엉망입니다. 원상복구 비용 ' + fmt(cost), 'bad');
@@ -713,11 +752,14 @@
 
   /* ---------- 이벤트 ---------- */
 
+  var EVICT_COST = 5e6;
+  var LAWSUIT_COST = 3e6;
+
   var PROP_EVENTS = {
     leak: {
       chance: function (st, p) { return 0.01 * KINDS[p.kind].repair; },
       make: function (st, p) {
-        var cost = money(value(st, p) * uni(st, 0.004, 0.012) * KINDS[p.kind].repair);
+        var cost = money(p.m2 * uni(st, 3e4, 8e4) * KINDS[p.kind].repair);
         return {
           title: '누수·보일러 고장',
           body: propName(p) + '에서 ' + (p.lease ? '세입자가 누수와 보일러 고장을 알려왔습니다.' : '빈집 점검 중 누수를 발견했습니다.') +
@@ -755,7 +797,7 @@
           body: propName(p) + ' 세입자가 이번 달 월세 ' + fmt(p.lease.rent) + '를 내지 않았습니다. 연락도 잘 닿지 않습니다.',
           choices: [
             { id: 'wait', label: '기다린다', hint: '보통 두어 달이면 해결되지만 반년 넘게 끌 수도 있습니다' },
-            { id: 'evict', label: '명도소송을 건다', hint: '소송비 ' + fmt(money(value(st, p) * 0.004)) + ', 4개월 뒤 퇴거' }
+            { id: 'evict', label: '명도소송을 건다', hint: '소송비 ' + fmt(EVICT_COST) + ', 4개월 뒤 퇴거' }
           ]
         };
       },
@@ -765,7 +807,7 @@
           p.defaultLeft = rand(st) < 0.6 ? 2 : 6;
           note(st, rep, propName(p) + ': 일단 기다리기로 했습니다.', 'warn');
         } else {
-          var cost = money(value(st, p) * 0.004);
+          var cost = EVICT_COST;
           st.cash -= cost;
           ledger(rep, '소송비', -cost);
           p.defaultLeft = 4;
@@ -795,7 +837,7 @@
         if (!p.lease) return;
         if (choice === 'accept' || rand(st) < 0.3) {
           if (choice !== 'accept') {
-            var cost = money(value(st, p) * 0.003);
+            var cost = LAWSUIT_COST;
             st.cash -= cost;
             ledger(rep, '소송비', -cost);
             note(st, rep, propName(p) + ': 세입자가 임차권등기 후 소송을 걸었습니다. 보증금 반환 판결, 소송비 ' + fmt(cost), 'bad', true);
@@ -849,7 +891,7 @@
     fire: {
       chance: function () { return 0.0006; },
       auto: function (st, p, rep) {
-        var cost = money(value(st, p) * 0.05);
+        var cost = money(p.m2 * uni(st, 40e4, 70e4));
         st.cash -= cost;
         ledger(rep, '화재 복구비', -cost);
         note(st, rep, '화재: ' + propName(p) + '에 불이 났습니다. 복구비 ' + fmt(cost), 'bad', true);
@@ -1021,8 +1063,7 @@
     }
 
     if (t % 12 === 0 && st.props.length) {
-      var hr = st.props.length >= 2 ? 0.005 : 0.0025;
-      var htax = money(st.props.reduce(function (a, p) { return a + value(st, p); }, 0) * hr);
+      var htax = holdingTax(st);
       ledger(rep, '보유세 (재산세·종부세)', -htax);
       st.cash -= htax;
     }
@@ -1069,7 +1110,7 @@
 
     var k = KINDS['gn-apt'];
     var price = k.base, jeonse = k.base * k.jeonseRatio;
-    var cash = CONFIG.startCash - (price - jeonse) - price * (0.01 + CONFIG.buyFee);
+    var cash = CONFIG.startCash - (price - jeonse) - price * (acqTaxRate(1, price) + CONFIG.buyFee);
     for (t = 1; t <= N; t++) {
       if (cash > 0) cash *= 1 + depositRate(st, t) / 100 / 12;
       if (t % CONFIG.leaseMonths === 0) {
@@ -1118,7 +1159,7 @@
   var Engine = {
     CONFIG: CONFIG, KINDS: KINDS, KIND_ORDER: KIND_ORDER, REGION_LABEL: REGION_LABEL, TYPE_LABEL: TYPE_LABEL,
     SALE_ASKS: SALE_ASKS, LEASE_ASKS: LEASE_ASKS, ERAS: ERAS, DATA: DATA,
-    newGame: newGame, advance: advance, resolveEvent: resolveEvent,
+    newGame: newGame, advance: advance, holdingTax: holdingTax, resolveEvent: resolveEvent,
     buyQuote: buyQuote, buy: buy, setSeeking: setSeeking, setSelling: setSelling,
     borrow: borrow, repay: repay, maxBorrow: maxBorrow,
     value: value, jeonseValue: jeonseValue, equity: equity, deposit: deposit,

@@ -42,7 +42,7 @@
   function load() {
     try {
       var s = JSON.parse(localStorage.getItem(SAVE_KEY));
-      return s && s.version === 1 && s.series ? s : null;
+      return s && s.version === 2 && s.series ? s : null;
     } catch (e) { return null; }
   }
   function loadBest() {
@@ -215,7 +215,7 @@
       tipFmt: function (v) { return v.toFixed(1); },
       xFmt: function (i) { var t = i - H; return t < 0 ? '시작 ' + (-t) + '개월 전' : t === 0 ? '시작' : t + '개월차'; },
       endLabels: true,
-      height: 170,
+      height: window.innerWidth > 880 ? 250 : 170,
       label: '강남·강북 아파트 시세 지수 추이'
     });
   }
@@ -244,8 +244,8 @@
         '<div class="where">' + esc(placeLabel(l)) + '</div>' +
         '<div class="what">' + esc(E.TYPE_LABEL[l.type]) + ' · 전용 ' + l.m2 + '㎡ · ' + esc(l.py) + '<br><span class="muted">' + esc(l.age + hope) + '</span></div>' +
         '<div class="price">매매' + money(l.price) + (l.tag ? '<span>시세 ' + esc(fmt(l.fair)) + '</span>' : '') + '</div>' +
-        '<div class="jeonse">전세 시세 ' + esc(fmt(j)) + ' · 갭 ' + esc(fmt(l.price - j)) + '</div>' +
-        '<div class="need' + (can ? '' : ' short') + '">' + (can ? '최소 필요 현금 ' : '현금 부족 · 최소 ') + esc(fmt(need)) + '</div>' +
+        '<dl class="facts"><dt>전세 시세</dt><dd>' + money(j) + '</dd><dt>갭</dt><dd>' + money(l.price - j) + '</dd>' +
+        '<dt' + (can ? '' : ' class="short"') + '>' + (can ? '최소 필요 현금' : '현금 부족') + '</dt><dd' + (can ? '' : ' class="short"') + '>' + money(need) + '</dd></dl>' +
         '<button class="btn" type="button" data-buy="' + l.id + '"' + (can ? '' : ' disabled') + '>매수 검토</button>' +
         '</article>';
     }).join('');
@@ -321,7 +321,7 @@
     rep.classList.remove('flash');
     void rep.offsetWidth;
     rep.classList.add('flash');
-    if (window.innerWidth <= 880) rep.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    if (window.innerWidth <= 880) document.querySelector('.market-panel').scrollIntoView({ block: 'start', behavior: 'smooth' });
     afterStep();
   }
 
@@ -594,7 +594,7 @@
       dlgBody.innerHTML = '<div class="dlg">' +
         '<div class="result-hero"><div class="grade' + (long ? ' long' : '') + '">' + esc(r.grade) + '</div>' +
         '<div class="result-net"><div class="eyebrow">' + (st.bankrupt ? '파산 · ' + st.turn + '개월차' : '60개월 후 최종 순자산') + '</div>' +
-        '<span class="num">' + esc(fmt(r.net)) + '</span><span class="muted">종잣돈 1억의 ' + r.mult.toFixed(2) + '배</span></div></div>' +
+        '<span class="num">' + esc(fmt(r.net)) + '</span><span class="muted">종잣돈 ' + esc(fmt(E.CONFIG.startCash)) + '의 ' + r.mult.toFixed(2) + '배</span></div></div>' +
         '<div class="reveal"><div class="eyebrow">이번 판의 서울은</div><div class="when">' + r.from.y + '년 ' + r.from.m + '월 ~ ' + r.to.y + '년 ' + r.to.m + '월</div>' +
         '<div class="chips">' + r.eras.map(function (e) { return chipHtml([e, '']); }).join('') + '</div>' +
         '<div class="sub">같은 기간 강남 아파트 <span class="' + cls(r.gnChange) + '">' + pct(r.gnChange) + '</span>, 강북 아파트 <span class="' + cls(r.gbChange) + '">' + pct(r.gbChange) + '</span></div></div>' +
@@ -694,7 +694,8 @@
     cfg.series.forEach(function (s) { all = all.concat(s.values); });
     var ticks = niceTicks(Math.min.apply(null, all), Math.max.apply(null, all), 4);
     var lo = ticks[0], hi = ticks[ticks.length - 1];
-    var decimals = ticks.length > 1 && ticks[1] - ticks[0] < 1 ? 1 : 0;
+    var tickStep = ticks.length > 1 ? ticks[1] - ticks[0] : 1;
+    var decimals = Math.abs(tickStep - Math.round(tickStep)) > 1e-9 ? 1 : 0; // 2.5 간격이면 97.5처럼 소수 표시
     var iw = W - pad.l - pad.r, ih = H - pad.t - pad.b;
     function x(i) { return pad.l + (n <= 1 ? iw / 2 : i * iw / (n - 1)); }
     function y(v) { return pad.t + (hi - v) / (hi - lo) * ih; }
@@ -811,7 +812,7 @@
   }
 
   function start(data) {
-    st = (data && data.st && data.st.version === 1) ? data.st : (load() || E.newGame());
+    st = (data && data.st && data.st.version === 2) ? data.st : (load() || E.newGame());
     E.syncListings(st); // 이전 버전 저장본의 못 사는 매물 정리
     var howtoPref = null;
     try { howtoPref = localStorage.getItem(HOWTO_KEY); } catch (e) { /* 저장 불가 환경 */ }

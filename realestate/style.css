@@ -130,6 +130,11 @@ button, input, select { font: inherit; color: inherit; }
 .stat .k { font-size: var(--t-xs); color: var(--ink-3); letter-spacing: 0.04em; }
 .stat .v { font-size: var(--t-lg); font-weight: 600; line-height: 1.25; white-space: nowrap; }
 .stat .v small { font-size: var(--t-xs); font-weight: 500; margin-left: 4px; }
+@media (max-width: 480px) {
+  .stats { margin-left: 0; gap: 4px 16px; }
+  .stat.opt { display: none; }
+  .stat .v { font-size: var(--t-md); }
+}
 .months {
   max-width: 1180px;
   margin: 0 auto;
@@ -149,6 +154,14 @@ button, input, select { font: inherit; color: inherit; }
 .col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 @media (max-width: 880px) {
   .grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+.market-panel { margin-bottom: 16px; }
+.market-layout { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 8px 24px; align-items: start; }
+.market-layout .regions { margin-top: 0; }
+@media (max-width: 880px) {
+  .market-layout { grid-template-columns: minmax(0, 1fr); }
+  .market-layout .regions { margin-top: 10px; }
 }
 
 .panel { background: var(--sheet); border: 1px solid var(--rule); border-radius: var(--radius); padding: 16px; min-width: 0; }
@@ -258,8 +271,10 @@ button, input, select { font: inherit; color: inherit; }
 .flyer .price { font-size: var(--t-xs); color: var(--ink-3); }
 .flyer .price .num { display: block; font-size: var(--t-xl); color: var(--ink); font-weight: 600; line-height: 1.2; }
 .flyer .jeonse { font-size: var(--t-xs); color: var(--ink-2); }
-.flyer .need { font-size: var(--t-xs); color: var(--ink-3); }
-.flyer .need.short { color: var(--danger); font-weight: 600; }
+.facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 10px; margin: 0; font-size: var(--t-xs); }
+.facts dt { color: var(--ink-3); }
+.facts dd { margin: 0; text-align: right; color: var(--ink-2); }
+.facts .short { color: var(--danger); font-weight: 600; }
 .flyer .btn { margin-top: 4px; }
 .flyer.special { border-color: var(--stamp); }
 .stamp {
