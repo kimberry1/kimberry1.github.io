@@ -158,7 +158,11 @@ button, input, select { font: inherit; color: inherit; }
 .eyebrow { font-size: var(--t-xs); color: var(--ink-3); letter-spacing: 0.06em; }
 
 .howto { background: var(--accent-soft); border-radius: var(--radius); padding: 12px 16px; margin-bottom: 16px; }
-.howto summary { cursor: pointer; font-weight: 600; }
+.howto summary { cursor: pointer; font-weight: 600; list-style: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.howto summary::-webkit-details-marker { display: none; }
+.howto-toggle { font-size: var(--t-xs); font-weight: 600; color: var(--accent); border: 1px solid currentColor; border-radius: 999px; padding: 3px 10px; white-space: nowrap; }
+.howto-toggle::after { content: '펼치기 ▾'; }
+.howto[open] .howto-toggle::after { content: '접기 ▴'; }
 .howto ul { margin: 10px 0 2px; padding-left: 1.1em; display: grid; gap: 6px; max-width: 70ch; }
 .howto li { font-size: var(--t-sm); color: var(--ink-2); }
 .howto li b { color: var(--ink); font-weight: 600; }
@@ -254,6 +258,8 @@ button, input, select { font: inherit; color: inherit; }
 .flyer .price { font-size: var(--t-xs); color: var(--ink-3); }
 .flyer .price .num { display: block; font-size: var(--t-xl); color: var(--ink); font-weight: 600; line-height: 1.2; }
 .flyer .jeonse { font-size: var(--t-xs); color: var(--ink-2); }
+.flyer .need { font-size: var(--t-xs); color: var(--ink-3); }
+.flyer .need.short { color: var(--danger); font-weight: 600; }
 .flyer .btn { margin-top: 4px; }
 .flyer.special { border-color: var(--stamp); }
 .stamp {

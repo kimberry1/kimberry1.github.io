@@ -7,6 +7,7 @@
   var pct = E.pct;
   var SAVE_KEY = 'blind-seoul-v1';
   var BEST_KEY = 'blind-seoul-best';
+  var HOWTO_KEY = 'blind-seoul-howto';
   var TONE_TAG = { good: '호재', bad: '악재', warn: '주의', info: '알림' };
   var LEASE_LABEL = { jeonse: '전세', wolse: '월세' };
 
@@ -141,7 +142,7 @@
     var tot = E.totals(st);
     $('props-aside').textContent = st.props.length ? st.props.length + '채 · 시세 합계 ' + fmt(tot.value) : '';
     if (!st.props.length) {
-      $('props').innerHTML = '<div class="empty-state"><b>아직 가진 집이 없습니다.</b><span>이번 달 매물에서 집을 고르세요. 1억으로는 갭투자(전세 끼고 매수)나 대출을 섞어야 살 수 있는 집이 많습니다.</span></div>';
+      $('props').innerHTML = '<div class="empty-state"><b>아직 가진 집이 없습니다.</b><span>이번 달 매물에서 집을 고르세요. 대출을 받아 사고, 전세 세입자가 들어오면 보증금으로 대출을 갚는 갭투자가 기본입니다.</span></div>';
       return;
     }
     var rate = E.gameRate(st, st.turn);
@@ -223,19 +224,29 @@
 
   function renderListings() {
     if (st.over) {
+      $('listings-aside').textContent = '';
       $('listings').innerHTML = '<div class="empty-state">게임이 끝났습니다.</div>';
+      return;
+    }
+    $('listings-aside').textContent = '현금 ' + fmt(st.cash) + '으로 살 수 있는 매물';
+    if (!st.listings.length) {
+      $('listings').innerHTML = '<div class="empty-state"><b>지금 현금으로 살 수 있는 매물이 없습니다.</b><span>가장 싼 매물도 대출을 한도까지 받았을 때 현금이 최소 ' +
+        esc(fmt(E.cheapestNeed(st))) + ' 필요합니다. 집을 팔거나, 추가 대출을 받거나, 세입자 보증금이 들어오면 매물이 다시 나옵니다.</span></div>';
       return;
     }
     $('listings').innerHTML = st.listings.map(function (l) {
       var j = E.jeonseValue(st, E.preview(st, l.id));
       var hope = l.redevHope ? ' · 재개발 기대' : l.rebuildHope ? ' · 재건축 기대' : '';
+      var need = E.minCash(st, l.price);
+      var can = need <= st.cash;
       return '<article class="flyer' + (l.tag ? ' special' : '') + '">' +
         (l.tag ? '<span class="stamp">' + esc(l.tag) + '</span>' : '') +
         '<div class="where">' + esc(placeLabel(l)) + '</div>' +
         '<div class="what">' + esc(E.TYPE_LABEL[l.type]) + ' · 전용 ' + l.m2 + '㎡ · ' + esc(l.py) + '<br><span class="muted">' + esc(l.age + hope) + '</span></div>' +
         '<div class="price">매매' + money(l.price) + (l.tag ? '<span>시세 ' + esc(fmt(l.fair)) + '</span>' : '') + '</div>' +
         '<div class="jeonse">전세 시세 ' + esc(fmt(j)) + ' · 갭 ' + esc(fmt(l.price - j)) + '</div>' +
-        '<button class="btn" type="button" data-buy="' + l.id + '">매수 검토</button>' +
+        '<div class="need' + (can ? '' : ' short') + '">' + (can ? '최소 필요 현금 ' : '현금 부족 · 최소 ') + esc(fmt(need)) + '</div>' +
+        '<button class="btn" type="button" data-buy="' + l.id + '"' + (can ? '' : ' disabled') + '>매수 검토</button>' +
         '</article>';
     }).join('');
   }
@@ -654,7 +665,6 @@
     st = E.newGame();
     save();
     closeDialog();
-    $('howto').open = true;
     render();
     window.scrollTo({ top: 0 });
   }
@@ -802,7 +812,13 @@
 
   function start(data) {
     st = (data && data.st && data.st.version === 1) ? data.st : (load() || E.newGame());
-    $('howto').open = st.turn === 0;
+    E.syncListings(st); // 이전 버전 저장본의 못 사는 매물 정리
+    var howtoPref = null;
+    try { howtoPref = localStorage.getItem(HOWTO_KEY); } catch (e) { /* 저장 불가 환경 */ }
+    $('howto').open = howtoPref ? howtoPref === 'open' : st.turn === 0;
+    $('howto').addEventListener('toggle', function () {
+      try { localStorage.setItem(HOWTO_KEY, $('howto').open ? 'open' : 'closed'); } catch (e) { /* 무시 */ }
+    });
     bind();
     render();
     afterStep();

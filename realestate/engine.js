@@ -293,11 +293,11 @@
 
   /* ---------- 매물 ---------- */
 
-  function makeListing(st, kind, tag) {
+  function makeListing(st, kind, tag, size, age) {
     var k = KINDS[kind];
     var t = st.turn;
-    var size = pick(st, SIZES[k.type]);
-    var age = pick(st, AGES[k.type]);
+    size = size || pick(st, SIZES[k.type]);
+    age = age || pick(st, AGES[k.type]);
     var noise = uni(st, 0.95, 1.05);
     var pk = k.region + (k.type === 'apt' ? 'Apt' : 'Villa');
     var fair = money(k.base * S(st, pk, t) / S(st, pk, 0) * size.f * age.f * noise);
@@ -316,9 +316,72 @@
     };
   }
 
-  function refreshListings(st) {
+  // 대출을 한도까지 받았을 때 매수에 필요한 최소 현금
+  function minCash(st, price) {
+    return price + money(price * acqTaxRate(st.props.length + 1)) + money(price * CONFIG.buyFee) - down(price * ltv(st), 1e6);
+  }
+  function affordable(st, l) { return minCash(st, l.price) <= st.cash; }
+
+  function shuffle(st, arr) {
+    for (var i = arr.length - 1; i > 0; i--) {
+      var j = Math.floor(rand(st) * (i + 1));
+      var x = arr[i]; arr[i] = arr[j]; arr[j] = x;
+    }
+    return arr;
+  }
+
+  // 지금 현금으로 살 수 있는 평형·연식 조합 중 하나로 매물을 만든다. 없으면 null.
+  function makeAffordable(st, kind, tag) {
+    var k = KINDS[kind];
+    var combos = [];
+    SIZES[k.type].forEach(function (size) {
+      AGES[k.type].forEach(function (age) { combos.push([size, age]); });
+    });
+    shuffle(st, combos);
+    for (var i = 0; i < combos.length; i++) {
+      var l = makeListing(st, kind, tag, combos[i][0], combos[i][1]);
+      if (affordable(st, l)) return l;
+    }
+    return null;
+  }
+
+  // 가장 싼 조합 기준 최소 필요 현금 (살 수 있는 매물이 없을 때 안내용)
+  function cheapestNeed(st) {
+    var best = Infinity;
+    KIND_ORDER.forEach(function (kind) {
+      var k = KINDS[kind];
+      var pk = k.region + (k.type === 'apt' ? 'Apt' : 'Villa');
+      var f = Math.min.apply(null, SIZES[k.type].map(function (x) { return x.f; })) *
+        Math.min.apply(null, AGES[k.type].map(function (x) { return x.f; })) * 0.95;
+      best = Math.min(best, minCash(st, money(k.base * S(st, pk, st.turn) / S(st, pk, 0) * f)));
+    });
+    return best;
+  }
+
+  // 일반 매물을 '지금 살 수 있는 것'으로 맞춘다: 못 사는 건 빼고, 종류별로 하나씩 우선 채운 뒤 남는 자리를 채운다.
+  function syncListings(st) {
+    var regular = st.listings.filter(function (l) { return !l.tag && affordable(st, l); });
     var specials = st.listings.filter(function (l) { return l.tag && l.until >= st.turn; });
-    st.listings = KIND_ORDER.map(function (k) { return makeListing(st, k); }).concat(specials);
+    if (!st.over) {
+      var open = [];
+      KIND_ORDER.forEach(function (kind) {
+        if (regular.length >= CONFIG.listingCount) return;
+        if (regular.some(function (l) { return l.kind === kind; })) { open.push(kind); return; }
+        var l = makeAffordable(st, kind);
+        if (l) { regular.push(l); open.push(kind); }
+      });
+      for (var guard = 0; open.length && regular.length < CONFIG.listingCount && guard < 8; guard++) {
+        var extra = makeAffordable(st, pick(st, open));
+        if (extra) regular.push(extra);
+      }
+      regular.sort(function (a, b) { return KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind); });
+    }
+    st.listings = regular.concat(specials);
+  }
+
+  function refreshListings(st) {
+    st.listings = st.listings.filter(function (l) { return l.tag; });
+    syncListings(st);
   }
 
   function listingName(l) { return l.dong + ' ' + TYPE_LABEL[l.type]; }
@@ -446,6 +509,7 @@
       note(st, rep, '경매 물건에 유치권 신고가 있었습니다. 명도·정리 비용 ' + fmt(extra) + ' 지출.', 'bad', true);
     }
     if (opts.leaseKind) p.seeking = { kind: opts.leaseKind, ask: opts.ask || 'market' };
+    syncListings(st);
     return { ok: true, prop: p };
   }
 
@@ -474,6 +538,7 @@
     p.loan += a;
     st.cash += a;
     note(st, st.report, propName(p) + ' 담보 추가 대출 ' + fmt(a), 'info');
+    syncListings(st);
     return { ok: true, amount: a };
   }
 
@@ -485,6 +550,7 @@
     p.loan -= a;
     st.cash -= a;
     note(st, st.report, propName(p) + ' 대출 상환 ' + fmt(a), 'info');
+    syncListings(st);
     return { ok: true, amount: a };
   }
 
@@ -836,7 +902,8 @@
     urgent: {
       weight: function () { return 1; },
       run: function (st, rep) {
-        var l = makeListing(st, pick(st, KIND_ORDER), '급매');
+        var l = makeAffordable(st, pick(st, KIND_ORDER), '급매');
+        if (!l) return;
         l.until = st.turn;
         st.listings.push(l);
         note(st, rep, '급매물 등장: ' + listingName(l) + ' ' + fmt(l.price) + ' (시세 ' + fmt(l.fair) + '). 이번 달에만 살 수 있습니다.', 'good', true);
@@ -845,7 +912,8 @@
     auction: {
       weight: function (st) { return chg(st, 'gnApt', st.turn, 3) < 0 ? 1.5 : 0.5; },
       run: function (st, rep) {
-        var l = makeListing(st, pick(st, KIND_ORDER), '경매');
+        var l = makeAffordable(st, pick(st, KIND_ORDER), '경매');
+        if (!l) return;
         l.until = st.turn;
         st.listings.push(l);
         note(st, rep, '경매 물건: ' + listingName(l) + ' 최저가 ' + fmt(l.price) + ' (시세 ' + fmt(l.fair) + '). 권리관계에 하자가 있을 수 있습니다.', 'info', true);
@@ -894,8 +962,8 @@
     var ev = st.pending.shift();
     if (!ev) return;
     var p = findProp(st, ev.propId);
-    if (!p) return;
-    PROP_EVENTS[ev.key].resolve(st, ev, choiceId, st.report, p);
+    if (p) PROP_EVENTS[ev.key].resolve(st, ev, choiceId, st.report, p);
+    syncListings(st);
   }
 
   /* ---------- 한 달 진행 ---------- */
@@ -1059,6 +1127,7 @@
     pSale: pSale, pTenant: pTenant, leaseTerms: leaseTerms, saleEstimate: saleEstimate,
     acqTaxRate: acqTaxRate, result: result, propName: propName, listingName: listingName, preview: preview,
     saleAsk: saleAsk, leaseAsk: leaseAsk, findProp: findProp,
+    minCash: minCash, affordable: affordable, cheapestNeed: cheapestNeed, syncListings: syncListings,
     fmt: fmt, pct: pct, ym: ym
   };
 

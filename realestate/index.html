@@ -29,10 +29,11 @@
 
 <main class="wrap">
   <details class="howto" id="howto">
-    <summary>게임 방법</summary>
+    <summary><span>게임 방법</span><span class="howto-toggle" aria-hidden="true"></span></summary>
     <ul>
       <li><b>목표:</b> 종잣돈 1억으로 60개월 동안 서울 아파트·빌라에 투자합니다. 끝날 때의 순자산(현금 + 집값 − 대출 − 보증금)이 점수입니다.</li>
       <li><b>몇 년도인지 모릅니다:</b> 1986~2025년 중 무작위로 고른 60개월의 시세 흐름을 따릅니다. 시작 가격과 시작 금리(4%)는 매판 같아서 연도는 게임이 끝나야 공개됩니다.</li>
+      <li><b>매물:</b> 지금 현금으로 살 수 있는 매물만 나옵니다(대출 한도까지 받는다고 가정). 하나를 사면 남은 현금에 맞춰 새 매물이 채워집니다.</li>
       <li><b>세입자:</b> 집을 사면 전세나 월세 세입자를 구합니다. 전세 보증금이 들어오면 대출부터 갚습니다. 못 구하면 대출 이자만 나갑니다.</li>
       <li><b>만기:</b> 계약은 2년입니다. 세입자가 나가는데 다음 세입자를 못 구하면 보증금을 현금으로 돌려줘야 합니다. 전세 시세가 떨어지면 재계약 때 차액을 돌려줍니다(역전세).</li>
       <li><b>매도:</b> 내놓는다고 바로 팔리지 않습니다. 매달 체결 확률에 따라 팔리고, 하락장일수록 잘 안 팔립니다. 급매로 내놓으면 빨리 팔립니다.</li>
@@ -60,7 +61,7 @@
         <div id="market"></div>
       </section>
       <section class="panel">
-        <div class="panel-head"><h2>이번 달 매물</h2><span class="aside">매달 새로 나옵니다</span></div>
+        <div class="panel-head"><h2>이번 달 매물</h2><span class="aside" id="listings-aside"></span></div>
         <div class="listings" id="listings"></div>
       </section>
       <section class="panel">
