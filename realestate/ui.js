@@ -439,7 +439,8 @@
         }
         lease += '</div>';
       } else {
-        lease = '<div class="note">세입자 없이 비워둡니다. 공실 관리비와 대출 이자가 나갑니다.</div>';
+        lease = '<div class="note">세입자 없이 비워둡니다. 공실 관리비와 대출 이자가 나가지만, 빈집은 실거주자도 살 수 있어 내놓으면 ' +
+          '<b>매도 체결 확률이 ' + E.CONFIG.saleVacant + '배</b>입니다(세입자 있는 집은 ' + E.CONFIG.saleWithTenant + '배). 짧게 들고 있다 팔 집에 씁니다.</div>';
       }
       var warn = '';
       if (!q.ok) warn = '<div class="note bad">' + esc(q.reason) + '</div>';
@@ -471,7 +472,7 @@
         '<input type="range" id="buy-loan" min="0" max="' + q.loanMax + '" step="1000000" value="' + q.loan + '" aria-label="대출 금액">' +
         '<div class="loan-out" id="buy-loan-out"></div></div>' +
         '<div class="dlg-section"><div class="eyebrow">임대 계획</div>' +
-        seg('buy-kind', [{ id: 'jeonse', label: '전세' }, { id: 'wolse', label: '월세' }, { id: 'none', label: '비워두기' }], form.kind) +
+        seg('buy-kind', [{ id: 'jeonse', label: '전세' }, { id: 'wolse', label: '월세' }, { id: 'none', label: '비워두기', sub: '빨리 팔 집' }], form.kind) +
         seg('buy-ask', E.LEASE_ASKS.map(function (a) { return { id: a.id, label: a.label }; }), form.ask) +
         '<div id="buy-lease"></div></div>' +
         '<div class="dlg-section"><div class="eyebrow">비용</div><table class="kv"><tbody id="buy-cost"></tbody></table></div>' +

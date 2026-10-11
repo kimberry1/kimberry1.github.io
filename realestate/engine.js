@@ -29,7 +29,9 @@
     auctionRatio: 0.7,
     penaltyRate: 12,       // 연체 이자율 (연 %)
     listingCount: 6,
-    refreshPerMonth: 3,    // 한 달에 매물을 새로 볼 수 있는 횟수
+    refreshPerMonth: 3,
+    saleVacant: 1.4,       // 빈집 매도 체결 확률 배수
+    saleWithTenant: 0.8,   // 세입자 있는 집 매도 체결 확률 배수    // 한 달에 매물을 새로 볼 수 있는 횟수
     maxEventsPerTurn: 3,
     troubleRate: 1.0,      // 골칫거리 이벤트 빈도 배수 (아래 확률은 연간 발생률을 월로 나눈 현실 기준치)
     marketEventChance: 0.25, // 매달 시장 전체 사건이 일어날 확률
@@ -261,7 +263,9 @@
   function pSale(st, p, askId) {
     var k = KINDS[p.kind];
     var m = clamp(1 + 12 * chg(st, p.region + 'Apt', st.turn, 3), 0.15, 2.0);
-    var pr = 0.3 * k.sale * m * saleAsk(askId).p * modMult(st, 'sale', p.region, p.type);
+    // 빈집은 실거주자도 살 수 있어 잘 팔리고, 세입자가 있으면 갭투자자만 살 수 있어 덜 팔린다
+    var occ = p.lease ? CONFIG.saleWithTenant : CONFIG.saleVacant;
+    var pr = 0.3 * k.sale * m * occ * saleAsk(askId).p * modMult(st, 'sale', p.region, p.type);
     return clamp(pr, 0.02, 0.95);
   }
 
