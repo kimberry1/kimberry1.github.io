@@ -42,7 +42,7 @@
   function load() {
     try {
       var s = JSON.parse(localStorage.getItem(SAVE_KEY));
-      return s && s.version === 2 && s.series ? s : null;
+      return s && s.version === 4 && s.series ? s : null;
     } catch (e) { return null; }
   }
   function loadBest() {
@@ -86,12 +86,18 @@
   function renderReport() {
     var r = st.report;
     var title = r.span ? r.span[0] + '~' + r.span[1] + '개월차 정산' : r.t === 0 ? '출발' : r.t + '개월차 정산';
+    var flows = r.flows || [];
     var total = r.ledger.reduce(function (a, x) { return a + x.amount; }, 0);
-    var rows = r.ledger.length
-      ? r.ledger.map(function (x) {
-        return '<tr><td>' + esc(x.label) + '</td><td>' + money(x.amount, { plus: true }) + '</td></tr>';
-      }).join('') + '<tr class="total"><td>합계</td><td>' + money(total, { plus: true }) + '</td></tr>'
-      : '<tr><td class="empty" colspan="2">' + (r.t === 0 ? '아직 들어오고 나간 돈이 없습니다.' : '이번 달 손익 항목이 없습니다.') + '</td></tr>';
+    var flowTotal = flows.reduce(function (a, x) { return a + x.amount; }, 0);
+    function rowHtml(x) { return '<tr><td>' + esc(x.label) + '</td><td>' + money(x.amount, { plus: true }) + '</td></tr>'; }
+    var rows = '<tr class="sect"><td colspan="2">손익 <span class="muted">순자산이 실제로 늘거나 주는 돈</span></td></tr>' + (r.ledger.length
+      ? r.ledger.map(rowHtml).join('') + '<tr class="total"><td>손익 합계</td><td>' + money(total, { plus: true }) + '</td></tr>'
+      : '<tr><td class="empty" colspan="2">' + (r.t === 0 ? '아직 들어오고 나간 돈이 없습니다.' : '손익 항목이 없습니다.') + '</td></tr>');
+    if (flows.length) {
+      rows += '<tr class="sect"><td colspan="2">현금 이동 <span class="muted">보증금·대출·매매 대금. 순자산은 그대로</span></td></tr>' +
+        flows.map(rowHtml).join('') +
+        '<tr class="total"><td>현금 변화</td><td>' + money(total + flowTotal, { plus: true }) + '</td></tr>';
+    }
     var items = r.items.length
       ? r.items.map(function (it) {
         return '<li class="' + (it.important ? 'important' : '') + '"><span class="tag ' + it.tone + '">' + TONE_TAG[it.tone] + '</span><span>' +
@@ -293,12 +299,14 @@
 
   function mergeReports(list) {
     if (list.length === 1) return list[0];
-    var m = { t: list[list.length - 1].t, span: [list[0].t, list[list.length - 1].t], ledger: [], items: [], netChange: 0 };
+    var m = { t: list[list.length - 1].t, span: [list[0].t, list[list.length - 1].t], ledger: [], flows: [], items: [], netChange: 0 };
+    function add(rows, x) {
+      var row = rows.filter(function (y) { return y.label === x.label; })[0];
+      if (row) row.amount += x.amount; else rows.push({ label: x.label, amount: x.amount });
+    }
     list.forEach(function (r) {
-      r.ledger.forEach(function (x) {
-        var row = m.ledger.filter(function (y) { return y.label === x.label; })[0];
-        if (row) row.amount += x.amount; else m.ledger.push({ label: x.label, amount: x.amount });
-      });
+      r.ledger.forEach(function (x) { add(m.ledger, x); });
+      (r.flows || []).forEach(function (x) { add(m.flows, x); });
       r.items.forEach(function (it) { m.items.push({ text: it.text, tone: it.tone, important: it.important, t: r.t }); });
       m.netChange += r.netChange || 0;
     });
@@ -593,7 +601,7 @@
       }).join('');
       dlgBody.innerHTML = '<div class="dlg">' +
         '<div class="result-hero"><div class="grade' + (long ? ' long' : '') + '">' + esc(r.grade) + '</div>' +
-        '<div class="result-net"><div class="eyebrow">' + (st.bankrupt ? '파산 · ' + st.turn + '개월차' : '60개월 후 최종 순자산') + '</div>' +
+        '<div class="result-net"><div class="eyebrow">' + (st.bankrupt ? '파산 · ' + st.turn + '개월차' : st.turns + '개월 후 최종 순자산') + '</div>' +
         '<span class="num">' + esc(fmt(r.net)) + '</span><span class="muted">종잣돈 ' + esc(fmt(E.CONFIG.startCash)) + '의 ' + r.mult.toFixed(2) + '배</span></div></div>' +
         '<div class="reveal"><div class="eyebrow">이번 판의 서울은</div><div class="when">' + r.from.y + '년 ' + r.from.m + '월 ~ ' + r.to.y + '년 ' + r.to.m + '월</div>' +
         '<div class="chips">' + r.eras.map(function (e) { return chipHtml([e, '']); }).join('') + '</div>' +
@@ -713,12 +721,15 @@
       o.push('<line class="grid-line" x1="' + pad.l + '" x2="' + (W - pad.r) + '" y1="' + yy + '" y2="' + yy + '"></line>');
       o.push('<text class="axis-text" x="' + (pad.l - 6) + '" y="' + (Number(yy) + 3.5) + '" text-anchor="end">' + esc(cfg.yFmt(tv, decimals)) + '</text>');
     });
-    var lastTickX = -Infinity;
+    var lastRight = -Infinity;
     (cfg.xTicks || []).forEach(function (t) {
       if (t.i < 0 || t.i >= n) return;
-      if (x(t.i) - lastTickX < t.label.length * 6.5 + 10) return; // 좁은 화면에서는 눈금을 솎아낸다
-      lastTickX = x(t.i);
       var anchor = t.i === 0 ? 'start' : t.i === n - 1 ? 'end' : 'middle';
+      // 글자 폭을 어림해 앞 눈금과 겹치면 건너뛴다 (좁은 화면에서 눈금 솎아내기)
+      var w = t.label.length * 6.4;
+      var left = anchor === 'start' ? x(t.i) : anchor === 'end' ? x(t.i) - w : x(t.i) - w / 2;
+      if (left < lastRight + 8) return;
+      lastRight = left + w;
       o.push('<text class="axis-text" x="' + x(t.i).toFixed(1) + '" y="' + (H - 6) + '" text-anchor="' + anchor + '">' + esc(t.label) + '</text>');
     });
     if (cfg.mark != null && cfg.mark < n) {
@@ -812,7 +823,7 @@
   }
 
   function start(data) {
-    st = (data && data.st && data.st.version === 2) ? data.st : (load() || E.newGame());
+    st = (data && data.st && data.st.version === 4) ? data.st : (load() || E.newGame());
     E.syncListings(st); // 이전 버전 저장본의 못 사는 매물 정리
     var howtoPref = null;
     try { howtoPref = localStorage.getItem(HOWTO_KEY); } catch (e) { /* 저장 불가 환경 */ }

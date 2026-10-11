@@ -11,10 +11,10 @@
 
   var CONFIG = {
     startCash: 10e8,
-    turns: 60,
+    turns: 120,
     history: 3,            // 시작 전 추세 계산용 개월 수
     baseRate: 4.0,         // 시작 금리 고정 (실제 금리는 변동 폭만 반영)
-    minRate: 1.0,
+    minRate: 1.5,
     ltv: 0.6,
     leaseMonths: 24,
     noticeMonths: 2,       // 만기 몇 달 전에 재계약 여부를 통보받는지
@@ -28,15 +28,18 @@
     auctionRatio: 0.7,
     penaltyRate: 12,       // 연체 이자율 (연 %)
     listingCount: 6,
-    maxEventsPerTurn: 2
+    maxEventsPerTurn: 3,
+    troubleRate: 2.5,      // 누수·미납·퇴거 같은 골칫거리 이벤트 빈도 배수
+    marketEventChance: 0.25, // 매달 시장 전체 사건이 일어날 확률
+    evictAfter: 3          // 월세가 이 개월 수만큼 밀리면 명도소송 여부를 묻는다
   };
 
   var KINDS = {
     // base: 동네 계수 1.0 기준 시작 시세 (아파트 전용 84㎡ 준신축, 빌라 52㎡ 구축)
     'gn-apt':   { region: 'gn', type: 'apt',   label: '강남 아파트', base: 15e8,  jeonseRatio: 0.45, sale: 1.0,  tenant: 1.0, rentDefault: 0.008, repair: 1.0 },
     'gb-apt':   { region: 'gb', type: 'apt',   label: '강북 아파트', base: 9e8,   jeonseRatio: 0.55, sale: 1.0,  tenant: 1.0, rentDefault: 0.008, repair: 1.0 },
-    'gn-villa': { region: 'gn', type: 'villa', label: '강남 빌라',   base: 4.5e8, jeonseRatio: 0.72, sale: 0.55, tenant: 0.8, rentDefault: 0.018, repair: 1.6 },
-    'gb-villa': { region: 'gb', type: 'villa', label: '강북 빌라',   base: 3e8,   jeonseRatio: 0.78, sale: 0.55, tenant: 0.8, rentDefault: 0.018, repair: 1.6 }
+    'gn-villa': { region: 'gn', type: 'villa', label: '강남 빌라',   base: 4.5e8, jeonseRatio: 0.72, sale: 0.55, tenant: 0.8, rentDefault: 0.018, repair: 1.3 },
+    'gb-villa': { region: 'gb', type: 'villa', label: '강북 빌라',   base: 3e8,   jeonseRatio: 0.78, sale: 0.55, tenant: 0.8, rentDefault: 0.018, repair: 1.3 }
   };
   var KIND_ORDER = ['gn-apt', 'gb-apt', 'gn-villa', 'gb-villa'];
   var REGION_LABEL = { gn: '강남', gb: '강북' };
@@ -148,10 +151,23 @@
   function priceKey(p) { return p.region + (p.type === 'apt' ? 'Apt' : 'Villa'); }
   function jKey(p) { return p.region + 'J'; }
 
+  // 금리 추세(앞뒤 30개월 이동평균). 게임 금리에는 추세에서 벗어난 폭(충격)만 반영해
+  // 고금리 시대(1990년대)에 시작했다고 10년 내내 1%대가 되는 왜곡을 막는다.
+  var RATE_GAP = (function () {
+    var r = DATA.rate, w = 30, out = [];
+    for (var i = 0; i < r.length; i++) {
+      var a = Math.max(0, i - w), b = Math.min(r.length - 1, i + w), sum = 0;
+      for (var j = a; j <= b; j++) sum += r[j];
+      out.push(r[i] - sum / (b - a + 1));
+    }
+    return out;
+  })();
+
   function gameRate(st, t) {
     var r = st.series.rate;
     var H = CONFIG.history;
-    var v = CONFIG.baseRate + (r[t + H] - r[H]);
+    // 시작 시점의 충격(r[H])은 1년 시정수로 서서히 걷어낸다: 시작 금리는 늘 4%, 이후엔 추세 대비 충격만 남는다
+    var v = CONFIG.baseRate + r[t + H] - r[H] * Math.exp(-t / 12);
     return Math.max(CONFIG.minRate, Math.round(v * 100) / 100);
   }
   function depositRate(st, t) { return Math.max(0.5, gameRate(st, t) - 1.5); }
@@ -242,14 +258,14 @@
     var j = jeonseValue(st, p);
     if (kind === 'jeonse') return { kind: kind, deposit: money(j * a.f), rent: 0 };
     var dep = money(j * 0.15);
-    var conv = (gameRate(st, st.turn) + 2.5) / 100;
+    var conv = (gameRate(st, st.turn) + 1.5) / 100; // 전월세 전환율 = 대출 금리 + 1.5%p
     return { kind: kind, deposit: dep, rent: money((j - dep) * conv / 12 * a.f) };
   }
 
   function pTenant(st, p, kind, askId) {
     var k = KINDS[p.kind];
-    var m = clamp(1 + 10 * chg(st, jKey(p), st.turn, 3), 0.3, 1.6);
-    var base = kind === 'jeonse' ? 0.5 : 0.42;
+    var m = clamp(1 + 14 * chg(st, jKey(p), st.turn, 3), 0.25, 1.6);
+    var base = kind === 'jeonse' ? 0.4 : 0.33;
     var pr = base * k.tenant * m * leaseAsk(askId).p * modMult(st, 'tenant', p.region, p.type);
     if (kind === 'jeonse' && !p.lease) {
       var remain = p.loan - leaseTerms(st, p, kind, askId).deposit;
@@ -441,7 +457,7 @@
   function newGame(seed) {
     if (seed == null) seed = (Date.now() ^ Math.floor(Math.random() * 4294967296)) | 0;
     var st = {
-      version: 2,
+      version: 4,
       seed: seed, rng: seed,
       turn: 0, turns: CONFIG.turns,
       cash: CONFIG.startCash,
@@ -466,7 +482,7 @@
     keys.forEach(function (k) { s[k] = [100]; });
     for (var k = 0; k <= H + N; k++) {
       var di = s0 - H + k;
-      s.rate.push(DATA.rate[di]);
+      s.rate.push(Math.round(RATE_GAP[di] * 100) / 100);
       if (k === 0) continue;
       ['gn', 'gb'].forEach(function (r) {
         var a = DATA[r + 'Apt'][di] / DATA[r + 'Apt'][di - 1] - 1 + gauss(st) * CONFIG.noise;
@@ -486,10 +502,17 @@
 
   /* ---------- 리포트 ---------- */
 
-  function ledger(rep, label, amount) {
+  function addRow(rows, label, amount) {
     if (!amount) return;
-    var row = rep.ledger.filter(function (r) { return r.label === label; })[0];
-    if (row) row.amount += amount; else rep.ledger.push({ label: label, amount: amount });
+    var row = rows.filter(function (r) { return r.label === label; })[0];
+    if (row) row.amount += amount; else rows.push({ label: label, amount: amount });
+  }
+  // 손익: 순자산을 실제로 늘리거나 줄이는 돈
+  function ledger(rep, label, amount) { addRow(rep.ledger, label, amount); }
+  // 현금 이동: 현금은 움직이지만 순자산은 그대로인 돈 (보증금, 대출, 매매 대금)
+  function flow(rep, label, amount) {
+    if (!rep.flows) rep.flows = [];
+    addRow(rep.flows, label, amount);
   }
   function note(st, rep, text, tone, important) {
     rep.items.push({ text: text, tone: tone || 'info', important: !!important });
@@ -534,9 +557,12 @@
       buyPrice: l.price, buyT: st.turn, buyCosts: q.tax + q.fee,
       loan: q.loan, lease: null, nextLease: null, seeking: null, selling: null,
       redevHope: l.redevHope, rebuildHope: l.rebuildHope, redev: false,
-      defaultLeft: 0, unpaid: 0, noRenew: false
+      defaultLeft: 0, unpaid: 0, missed: 0, evicting: false, noRenew: false
     };
     st.cash -= q.need;
+    flow(st.report, '매수 대금 (대출 제외)', -(l.price - q.loan));
+    ledger(st.report, '취득세', -q.tax);
+    ledger(st.report, '매수 중개수수료', -q.fee);
     st.props.push(p);
     st.listings = st.listings.filter(function (x) { return x.id !== l.id; });
     var rep = st.report;
@@ -545,6 +571,7 @@
     if (l.tag === '경매' && rand(st) < 0.3) {
       var extra = money(l.fair * uni(st, 0.03, 0.07));
       st.cash -= extra;
+      ledger(rep, '경매 정리 비용', -extra);
       note(st, rep, '경매 물건에 유치권 신고가 있었습니다. 명도·정리 비용 ' + fmt(extra) + ' 지출.', 'bad', true);
     }
     if (opts.leaseKind) p.seeking = { kind: opts.leaseKind, ask: opts.ask || 'market' };
@@ -576,6 +603,7 @@
     if (a <= 0) return { ok: false, msg: '추가 대출 한도가 없습니다.' };
     p.loan += a;
     st.cash += a;
+    flow(st.report, '추가 대출', a);
     note(st, st.report, propName(p) + ' 담보 추가 대출 ' + fmt(a), 'info');
     syncListings(st);
     return { ok: true, amount: a };
@@ -588,6 +616,7 @@
     if (a <= 0) return { ok: false, msg: '상환할 현금이 없습니다.' };
     p.loan -= a;
     st.cash -= a;
+    flow(st.report, '대출 상환', -a);
     note(st, st.report, propName(p) + ' 대출 상환 ' + fmt(a), 'info');
     syncListings(st);
     return { ok: true, amount: a };
@@ -602,6 +631,7 @@
       start: st.turn, end: st.turn + CONFIG.leaseMonths, renew: null
     };
     st.cash += terms.deposit;
+    flow(rep, '보증금 받음 (나중에 돌려줄 돈)', terms.deposit);
     ledger(rep, '임대 중개수수료', -fee);
     st.cash -= fee;
     var text = propName(p) + (terms.kind === 'jeonse'
@@ -612,7 +642,9 @@
       if (r > 0) {
         p.loan -= r;
         st.cash -= r;
+        flow(rep, '보증금으로 대출 상환', -r);
         text += ' · 보증금으로 대출 ' + fmt(r) + ' 상환';
+        if (terms.deposit > r) text += ' · 남은 ' + fmt(terms.deposit - r) + '은 현금으로 (만기에 돌려줄 돈)';
       }
     }
     note(st, rep, text, 'good', true);
@@ -621,17 +653,20 @@
   function endLeaseMoveOut(st, rep, p) {
     var back = Math.max(0, p.lease.deposit - p.unpaid);
     st.cash -= back;
+    flow(rep, '보증금 반환', -back);
     note(st, rep, propName(p) + ' 세입자 퇴거: 보증금 ' + fmt(back) + ' 반환' +
       (p.unpaid ? ' (밀린 월세 ' + fmt(p.unpaid) + ' 공제)' : ''), back > 0 ? 'bad' : 'info', true);
     var kind = p.lease.kind;
     p.lease = null;
     p.nextLease = null;
+    p.evicting = false;
+    p.missed = 0;
     p.unpaid = 0;
     p.defaultLeft = 0;
     p.noRenew = false;
     if (!p.seeking) p.seeking = { kind: kind, ask: 'market' };
-    if (rand(st) < 0.12) {
-      var cost = money(p.m2 * uni(st, 1e4, 4e4) * KINDS[p.kind].repair);
+    if (rand(st) < 0.25) {
+      var cost = money(p.m2 * uni(st, 0.5e4, 2.5e4) * KINDS[p.kind].repair); // 도배·청소 등 84㎡ 기준 40~210만
       st.cash -= cost;
       ledger(rep, '수리비', -cost);
       note(st, rep, propName(p) + ': 퇴거 후 집 상태가 엉망입니다. 원상복구 비용 ' + fmt(cost), 'bad');
@@ -644,7 +679,7 @@
       var L = p.lease;
       if (!L) return;
       if (L.renew === null && t >= L.end - CONFIG.noticeMonths) {
-        var pr = p.noRenew ? 0 : (L.kind === 'wolse' ? 0.55 : 0.5);
+        var pr = p.noRenew ? 0 : 0.45;
         L.renew = rand(st) < pr;
         if (L.renew) {
           note(st, rep, propName(p) + ': 세입자가 만기 후 재계약하겠다고 알려왔습니다.', 'info');
@@ -661,6 +696,7 @@
           var nd = mkt >= L.deposit ? Math.min(money(L.deposit * 1.05), mkt) : mkt;
           var diff = nd - L.deposit;
           st.cash += diff;
+          flow(rep, diff >= 0 ? '전세 보증금 증액분 받음' : '역전세 차액 반환', diff);
           if (diff < 0) note(st, rep, propName(p) + ' 역전세: 전세 시세가 떨어져 재계약하며 보증금 차액 ' + fmt(-diff) + '을 돌려줬습니다.', 'bad', true);
           else note(st, rep, propName(p) + ' 전세 재계약: 보증금 ' + fmt(L.deposit) + ' → ' + fmt(nd) + ' (5% 상한)', 'good');
           L.deposit = nd;
@@ -678,12 +714,15 @@
       if (p.nextLease) {
         var n = p.nextLease;
         // 새 보증금을 받고, 기존 보증금에서 밀린 월세를 뺀 만큼 돌려준다
-        var delta = n.deposit - L.deposit + p.unpaid;
+        var delta = n.deposit - Math.max(0, L.deposit - p.unpaid);
         st.cash += delta;
+        flow(rep, '세입자 교체 보증금 차액', delta);
         p.lease = { kind: n.kind, deposit: n.deposit, rent: n.rent, start: t, end: t + CONFIG.leaseMonths, renew: null };
         p.nextLease = null;
         p.unpaid = 0;
         p.defaultLeft = 0;
+        p.missed = 0;
+        p.evicting = false;
         p.noRenew = false;
         note(st, rep, propName(p) + ' 세입자 교체 완료: 보증금 차액 ' + fmt(delta, { plus: true }),
           delta >= 0 ? 'good' : 'bad', true);
@@ -728,6 +767,7 @@
       var e = saleEstimate(st, p, p.selling.ask);
       var gain = e.price - p.buyPrice;
       sellProp(st, p, e.price, e.fee, e.tax);
+      flow(rep, '매도 대금 (대출·보증금 정리 후)', e.price - e.loan - e.deposit);
       ledger(rep, '매도 중개수수료', -e.fee);
       if (e.tax) ledger(rep, '양도소득세', -e.tax);
       note(st, rep, propName(p) + ' 매도 체결 ' + fmt(e.price) + ' (매수가 대비 ' + fmt(gain, { plus: true }) + ') · ' +
@@ -742,7 +782,10 @@
     if (!target) return false;
     var price = money(value(st, target) * CONFIG.auctionRatio);
     var fee = money(price * 0.01);
+    var debts = target.loan + deposit(target);
     var net = sellProp(st, target, price, fee, 0);
+    flow(rep, '경매 낙찰 대금 (대출·보증금 정리 후)', price - debts);
+    ledger(rep, '경매 비용', -fee);
     note(st, rep, '경매 진행: ' + propName(target) + '이(가) 시세의 70%인 ' + fmt(price) + '에 낙찰됐습니다. 대출·보증금 정리 후 ' +
       fmt(net, { plus: true }), 'bad', true);
     return true;
@@ -756,18 +799,47 @@
   var LAWSUIT_COST = 3e6;
 
   var PROP_EVENTS = {
-    leak: {
-      chance: function (st, p) { return 0.01 * KINDS[p.kind].repair; },
+    boiler: {
+      chance: function (st, p) { return 0.008 * CONFIG.troubleRate; },
       make: function (st, p) {
-        var cost = money(p.m2 * uni(st, 3e4, 8e4) * KINDS[p.kind].repair);
+        var replace = rand(st) < 0.4;
+        var cost = money(replace ? uni(st, 80e4, 150e4) : uni(st, 15e4, 50e4));
         return {
-          title: '누수·보일러 고장',
-          body: propName(p) + '에서 ' + (p.lease ? '세입자가 누수와 보일러 고장을 알려왔습니다.' : '빈집 점검 중 누수를 발견했습니다.') +
-            ' 수리비 견적은 ' + fmt(cost) + '입니다.',
+          title: replace ? '보일러 교체' : '보일러 고장',
+          body: propName(p) + (p.lease ? ' 세입자가 ' : ' 빈집 점검 중 ') + (replace
+            ? '보일러가 아예 작동하지 않는다고 합니다. 연식이 오래돼 교체해야 하고 견적은 '
+            : '보일러에서 온수가 안 나온다고 합니다. 부품 교체 견적은 ') + fmt(cost) + '입니다.',
+          data: { cost: cost },
+          choices: [
+            { id: 'fix', label: '바로 고친다', hint: fmt(cost) + ' 지출' },
+            { id: 'delay', label: '미룬다', hint: p.lease ? '세입자가 재계약을 거부하고, 결국 비용은 1.5배로 나갑니다' : '나중에 1.5배로 고칩니다' }
+          ]
+        };
+      },
+      resolve: function (st, ev, choice, rep, p) {
+        var cost = choice === 'fix' ? ev.data.cost : money(ev.data.cost * 1.5);
+        st.cash -= cost;
+        ledger(rep, '수리비', -cost);
+        if (choice === 'fix') {
+          note(st, rep, propName(p) + ' 보일러 수리 완료 (' + fmt(cost) + ')', 'info');
+        } else {
+          if (p.lease) p.noRenew = true;
+          note(st, rep, propName(p) + ': 수리를 미루다 세입자가 직접 고치고 비용 ' + fmt(cost) + '을 청구했습니다.' + (p.lease ? ' 만기에 나가겠다고 합니다.' : ''), 'bad', true);
+        }
+      }
+    },
+    leak: {
+      chance: function (st, p) { return 0.005 * KINDS[p.kind].repair * CONFIG.troubleRate; },
+      make: function (st, p) {
+        var cost = money(uni(st, 50e4, 200e4));
+        return {
+          title: '누수',
+          body: propName(p) + (p.lease ? '에서 세입자가 욕실 천장에 물이 샌다고 알려왔습니다.' : '을 점검하다 욕실 배관 누수를 발견했습니다.') +
+            ' 배관 수리 견적은 ' + fmt(cost) + '입니다.',
           data: { cost: cost },
           choices: [
             { id: 'fix', label: '바로 수리한다', hint: fmt(cost) + ' 지출' },
-            { id: 'delay', label: '미룬다', hint: '절반 확률로 피해가 두 배로 커지고 세입자가 재계약을 거부합니다' }
+            { id: 'delay', label: '미룬다', hint: '절반 확률로 아랫집까지 번져 배상금 200~600만이 추가됩니다' }
           ]
         };
       },
@@ -776,40 +848,63 @@
         if (choice === 'fix') {
           st.cash -= cost;
           ledger(rep, '수리비', -cost);
-          note(st, rep, propName(p) + ' 수리 완료 (' + fmt(cost) + ')', 'info');
+          note(st, rep, propName(p) + ' 누수 수리 완료 (' + fmt(cost) + ')', 'info');
         } else if (rand(st) < 0.5) {
-          note(st, rep, propName(p) + ': 다행히 피해가 더 커지지 않았습니다.', 'good');
+          st.cash -= cost;
+          ledger(rep, '수리비', -cost);
+          note(st, rep, propName(p) + ': 피해가 번지기 전에 고쳤습니다 (' + fmt(cost) + ').', 'info');
         } else {
-          st.cash -= cost * 2;
-          ledger(rep, '수리비', -cost * 2);
+          var comp = money(uni(st, 200e4, 600e4));
+          st.cash -= cost + comp;
+          ledger(rep, '수리비', -cost);
+          ledger(rep, '아랫집 배상', -comp);
           if (p.lease) p.noRenew = true;
-          note(st, rep, propName(p) + ': 아랫집까지 물이 샜습니다. 수리·배상 ' + fmt(cost * 2) + (p.lease ? ', 세입자는 재계약하지 않겠다고 합니다.' : ''), 'bad', true);
+          note(st, rep, propName(p) + ': 아랫집까지 물이 샜습니다. 수리 ' + fmt(cost) + ' + 배상 ' + fmt(comp) + (p.lease ? ', 세입자는 재계약하지 않겠다고 합니다.' : ''), 'bad', true);
         }
       }
     },
     rentDefault: {
       chance: function (st, p) {
-        return p.lease && p.lease.kind === 'wolse' && !p.defaultLeft ? KINDS[p.kind].rentDefault : 0;
+        return p.lease && p.lease.kind === 'wolse' && !p.defaultLeft && p.lease.end - st.turn > 1 ? KINDS[p.kind].rentDefault * CONFIG.troubleRate : 0;
       },
+      auto: function (st, p, rep) {
+        var r = rand(st);
+        p.defaultLeft = r < 0.5 ? 2 : r < 0.8 ? 5 : 999; // 999: 소송 전까지 계속 안 낸다
+        p.missed = 0;
+        note(st, rep, propName(p) + ' 월세 미납: 세입자가 다음 달부터 월세 ' + fmt(p.lease.rent) + '를 못 내겠다고 합니다. ' +
+          CONFIG.evictAfter + '개월 넘게 밀리면 명도소송을 검토하게 됩니다.', 'warn', true);
+      }
+    },
+    eviction: {
+      chance: function () { return 0; }, // 무작위로 일어나지 않고, 월세가 밀린 개월 수로만 뜬다
       make: function (st, p) {
+        var dep = p.lease.deposit;
         return {
-          title: '월세 미납',
-          body: propName(p) + ' 세입자가 이번 달 월세 ' + fmt(p.lease.rent) + '를 내지 않았습니다. 연락도 잘 닿지 않습니다.',
+          title: '월세 ' + p.missed + '개월 연체 · 명도소송',
+          body: propName(p) + ' 세입자가 월세를 ' + p.missed + '개월째 내지 않았습니다. 밀린 월세는 ' + fmt(p.unpaid) + ', 보증금은 ' + fmt(dep) + '입니다.' +
+            (p.unpaid >= dep ? ' 이미 보증금으로도 다 못 메웁니다.' : ' 보증금에서 공제할 수 있는 여유는 ' + fmt(dep - p.unpaid) + ' 남았습니다.'),
           choices: [
-            { id: 'wait', label: '기다린다', hint: '보통 두어 달이면 해결되지만 반년 넘게 끌 수도 있습니다' },
-            { id: 'evict', label: '명도소송을 건다', hint: '소송비 ' + fmt(EVICT_COST) + ', 4개월 뒤 퇴거' }
+            { id: 'evict', label: '명도소송을 건다', hint: '소송비 ' + fmt(EVICT_COST) + ' · 4개월 뒤 퇴거 · 그동안 월세는 못 받습니다' },
+            { id: 'wait', label: '조금 더 기다린다', hint: '40% 확률로 다음 달부터 다시 냅니다. 아니면 ' + CONFIG.evictAfter + '개월 뒤 다시 묻습니다' }
           ]
         };
       },
       resolve: function (st, ev, choice, rep, p) {
-        if (!p.lease) return;
+        if (!p.lease || !p.defaultLeft) return;
         if (choice === 'wait') {
-          p.defaultLeft = rand(st) < 0.6 ? 2 : 6;
-          note(st, rep, propName(p) + ': 일단 기다리기로 했습니다.', 'warn');
+          if (rand(st) < 0.4) {
+            p.defaultLeft = 0;
+            p.missed = 0;
+            note(st, rep, propName(p) + ': 세입자가 다음 달부터 다시 월세를 내기로 했습니다. 밀린 ' + fmt(p.unpaid) + '은 보증금에서 정산합니다.', 'info');
+          } else {
+            p.defaultLeft = Math.max(p.defaultLeft, CONFIG.evictAfter);
+            note(st, rep, propName(p) + ': 일단 더 기다리기로 했습니다.', 'warn');
+          }
         } else {
           var cost = EVICT_COST;
           st.cash -= cost;
           ledger(rep, '소송비', -cost);
+          p.evicting = true;
           p.defaultLeft = 4;
           p.lease.end = st.turn + 4;
           p.lease.renew = false;
@@ -820,7 +915,7 @@
     },
     earlyLeave: {
       chance: function (st, p) {
-        return p.lease && p.lease.kind === 'jeonse' && p.lease.renew === null && p.lease.end - st.turn > 4 ? 0.005 : 0;
+        return p.lease && p.lease.kind === 'jeonse' && p.lease.renew === null && p.lease.end - st.turn > 4 ? 0.005 * CONFIG.troubleRate : 0;
       },
       make: function (st, p) {
         return {
@@ -848,41 +943,102 @@
         }
       }
     },
+    wallpaper: {
+      chance: function (st, p) { return p.lease && !p.noRenew && !p.defaultLeft ? 0.006 * CONFIG.troubleRate : 0; },
+      make: function (st, p) {
+        var cost = money(p.m2 * uni(st, 1.5e4, 3.5e4)); // 84㎡ 기준 130~290만
+        return {
+          title: '세입자 도배·장판 교체 요구',
+          body: propName(p) + ' 세입자가 벽지 곰팡이와 들뜬 장판을 고쳐달라고 합니다. 견적은 ' + fmt(cost) + '입니다.',
+          data: { cost: cost },
+          choices: [
+            { id: 'fix', label: '고쳐준다', hint: fmt(cost) + ' 지출 · 재계약 가능성 유지' },
+            { id: 'refuse', label: '거절한다', hint: '세입자가 만기에 나갑니다' }
+          ]
+        };
+      },
+      resolve: function (st, ev, choice, rep, p) {
+        if (choice === 'fix') {
+          st.cash -= ev.data.cost;
+          ledger(rep, '수리비', -ev.data.cost);
+          note(st, rep, propName(p) + ' 도배·장판 교체 (' + fmt(ev.data.cost) + ')', 'info');
+        } else {
+          p.noRenew = true;
+          note(st, rep, propName(p) + ': 수리를 거절하자 세입자가 만기에 나가겠다고 합니다.', 'warn');
+        }
+      }
+    },
+    buyOffer: {
+      chance: function (st, p) {
+        if (st.turn - p.buyT < 6) return 0;
+        var c3 = chg(st, p.region + 'Apt', st.turn, 3);
+        return c3 > 0.02 ? 0.012 : c3 > 0 ? 0.006 : 0.002;
+      },
+      make: function (st, p) {
+        var price = money(value(st, p) * uni(st, 1.04, 1.1));
+        var fee = money(price * CONFIG.sellFee);
+        var tax = gainsTax(st, p, price, fee);
+        var net = price - fee - tax.tax - p.loan - deposit(p);
+        return {
+          title: '매수 제안',
+          body: '중개사무소에서 ' + propName(p) + '을(를) 시세(' + fmt(value(st, p)) + ')보다 비싼 ' + fmt(price) + '에 사겠다는 손님이 있다고 연락이 왔습니다. ' +
+            '양도세 ' + fmt(tax.tax) + '(' + tax.label + ')와 대출·보증금을 정리하면 손에 쥐는 돈은 ' + fmt(net) + '입니다.',
+          data: { price: price, fee: fee, tax: tax.tax, label: tax.label },
+          choices: [
+            { id: 'accept', label: '판다', hint: '이번 달 바로 계약합니다' },
+            { id: 'refuse', label: '안 판다', hint: '계속 보유합니다' }
+          ]
+        };
+      },
+      resolve: function (st, ev, choice, rep, p) {
+        if (choice !== 'accept') {
+          note(st, rep, propName(p) + ' 매수 제안을 거절했습니다.', 'info');
+          return;
+        }
+        var d = ev.data;
+        var debts = p.loan + deposit(p);
+        var net = sellProp(st, p, d.price, d.fee, d.tax);
+        flow(rep, '매도 대금 (대출·보증금 정리 후)', d.price - debts);
+        ledger(rep, '매도 중개수수료', -d.fee);
+        if (d.tax) ledger(rep, '양도소득세', -d.tax);
+        note(st, rep, propName(p) + ' 매수 제안 수락: ' + fmt(d.price) + '에 매도 · ' + d.label + (d.tax ? ' ' + fmt(d.tax) : '') + ' · 손에 쥔 돈 ' + fmt(net), 'good', true);
+      }
+    },
     redev: {
-      chance: function (st, p) { return p.type === 'villa' && !p.redev ? (p.redevHope ? 0.006 : 0.0015) : 0; },
+      chance: function (st, p) { return p.type === 'villa' && !p.redev ? (p.redevHope ? 0.0015 : 0.0003) : 0; },
       auto: function (st, p, rep) {
-        var m = uni(st, 1.3, 1.6);
+        var m = uni(st, 1.12, 1.25);
         p.premium *= m;
         p.redev = true;
         note(st, rep, '재개발 구역 지정: ' + propName(p) + ' 시세가 ' + pct(m - 1, 0) + ' 뛰었습니다. 전세 시세는 그대로라 갭이 벌어집니다.', 'good', true);
       }
     },
     redevCancel: {
-      chance: function (st, p) { return p.redev ? 0.01 : 0; },
+      chance: function (st, p) { return p.redev ? 0.006 : 0; },
       auto: function (st, p, rep) {
-        p.premium *= 0.77;
+        p.premium *= 0.88;
         p.redev = false;
-        note(st, rep, '재개발 무산: 주민 반대로 ' + propName(p) + ' 일대 재개발이 해제됐습니다. 시세 -23%.', 'bad', true);
+        note(st, rep, '재개발 무산: 주민 반대로 ' + propName(p) + ' 일대 재개발이 해제됐습니다. 시세 -12%.', 'bad', true);
       }
     },
     rebuild: {
-      chance: function (st, p) { return p.rebuildHope ? 0.004 : 0; },
+      chance: function (st, p) { return p.rebuildHope ? 0.001 : 0; },
       auto: function (st, p, rep) {
-        var m = uni(st, 1.12, 1.25);
+        var m = uni(st, 1.06, 1.12);
         p.premium *= m;
         p.rebuildHope = false;
         note(st, rep, '재건축 안전진단 통과: ' + propName(p) + ' 시세 ' + pct(m - 1, 0), 'good', true);
       }
     },
     station: {
-      chance: function () { return 0.002; },
+      chance: function () { return 0.0005; },
       auto: function (st, p, rep) {
-        p.premium *= 1.08;
-        note(st, rep, '역 신설 확정: ' + propName(p) + ' 인근에 지하철역이 들어섭니다. 시세 +8%.', 'good', true);
+        p.premium *= 1.05;
+        note(st, rep, '역 신설 확정: ' + propName(p) + ' 인근에 지하철역이 들어섭니다. 시세 +5%.', 'good', true);
       }
     },
     noise: {
-      chance: function (st, p) { return p.lease && !p.noRenew ? 0.006 : 0; },
+      chance: function (st, p) { return p.lease && !p.noRenew ? 0.006 * CONFIG.troubleRate : 0; },
       auto: function (st, p, rep) {
         p.noRenew = true;
         note(st, rep, propName(p) + ': 층간소음 분쟁으로 세입자가 만기에 나가겠다고 합니다.', 'warn');
@@ -891,7 +1047,7 @@
     fire: {
       chance: function () { return 0.0006; },
       auto: function (st, p, rep) {
-        var cost = money(p.m2 * uni(st, 40e4, 70e4));
+        var cost = money(p.m2 * uni(st, 20e4, 50e4)); // 84㎡ 기준 1,700~4,200만
         st.cash -= cost;
         ledger(rep, '화재 복구비', -cost);
         note(st, rep, '화재: ' + propName(p) + '에 불이 났습니다. 복구비 ' + fmt(cost), 'bad', true);
@@ -963,6 +1119,15 @@
     }
   };
 
+  function pushEvent(st, rep, key, p) {
+    var ev = PROP_EVENTS[key].make(st, p);
+    ev.key = key;
+    ev.propId = p.id;
+    ev.id = 'E' + (st.nextId++);
+    st.pending.push(ev);
+    note(st, rep, ev.title + ': ' + propName(p), 'warn', true);
+  }
+
   function rollEvents(st, rep) {
     var count = 0;
     var props = st.props.slice();
@@ -973,20 +1138,12 @@
         var e = PROP_EVENTS[key];
         if (rand(st) >= e.chance(st, p)) continue;
         count++;
-        if (e.auto) {
-          e.auto(st, p, rep);
-        } else {
-          var ev = e.make(st, p);
-          ev.key = key;
-          ev.propId = p.id;
-          ev.id = 'E' + (st.nextId++);
-          st.pending.push(ev);
-          note(st, rep, ev.title + ': ' + propName(p), 'warn', true);
-        }
+        if (e.auto) e.auto(st, p, rep);
+        else pushEvent(st, rep, key, p);
         break;
       }
     }
-    if (count >= CONFIG.maxEventsPerTurn || rand(st) >= 0.12) return;
+    if (count >= CONFIG.maxEventsPerTurn || rand(st) >= CONFIG.marketEventChance) return;
     var pool = [];
     var total = 0;
     for (var g in GLOBAL_EVENTS) {
@@ -1015,7 +1172,7 @@
     var prevNet = netWorth(st);
     st.turn += 1;
     var t = st.turn;
-    var rep = { t: t, ledger: [], items: [] };
+    var rep = { t: t, ledger: [], flows: [], items: [] };
     st.report = rep;
 
     var expired = st.mods.filter(function (m) { return m.until === t - 1; });
@@ -1036,13 +1193,20 @@
     }
 
     var interest = 0, rent = 0, vacancy = 0;
+    var evictionDue = [];
     st.props.forEach(function (p) {
       interest += p.loan * rate / 100 / 12;
       if (p.lease && p.lease.kind === 'wolse') {
         if (p.defaultLeft > 0) {
           p.defaultLeft -= 1;
           p.unpaid += p.lease.rent;
-          if (p.defaultLeft === 0 && p.lease.renew !== false) note(st, rep, propName(p) + ': 세입자가 다시 월세를 내기 시작했습니다. 밀린 돈은 보증금에서 정산합니다.', 'info');
+          p.missed = (p.missed || 0) + 1;
+          if (p.defaultLeft === 0 && !p.evicting) {
+            p.missed = 0;
+            note(st, rep, propName(p) + ': 세입자가 다시 월세를 내기 시작했습니다. 밀린 ' + fmt(p.unpaid) + '은 보증금에서 정산합니다.', 'info');
+          } else if (!p.evicting && p.missed % CONFIG.evictAfter === 0) {
+            evictionDue.push(p);
+          }
         } else {
           rent += p.lease.rent;
         }
@@ -1071,6 +1235,9 @@
     processSales(st, rep);
     processSearch(st, rep);
     processLeases(st, rep);
+    evictionDue.forEach(function (p) {
+      if (st.props.indexOf(p) >= 0 && p.lease && p.defaultLeft > 0) pushEvent(st, rep, 'eviction', p);
+    });
     rollEvents(st, rep);
 
     if (st.cash < 0) {
@@ -1126,10 +1293,11 @@
 
   function grade(mult, bankrupt) {
     if (bankrupt) return '파산';
+    // 120개월 기준: 예금만 해도 약 1.2배
     if (mult >= 3) return 'S';
     if (mult >= 2) return 'A';
-    if (mult >= 1.5) return 'B';
-    if (mult >= 1.2) return 'C';
+    if (mult >= 1.6) return 'B';
+    if (mult >= 1.3) return 'C';
     if (mult >= 1.0) return 'D';
     return 'F';
   }

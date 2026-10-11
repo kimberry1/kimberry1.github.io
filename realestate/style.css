@@ -140,10 +140,13 @@ button, input, select { font: inherit; color: inherit; }
   margin: 0 auto;
   padding: 0 16px 10px;
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 6px;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 4px;
 }
-.year { display: grid; grid-template-columns: repeat(12, 1fr); gap: 2px; }
+@media (max-width: 600px) {
+  .months { grid-template-columns: repeat(5, 1fr); row-gap: 4px; }
+}
+.year { display: grid; grid-template-columns: repeat(12, 1fr); gap: 1px; }
 .month { height: 6px; border-radius: 1px; background: var(--rule); }
 .month.done { background: var(--ink-3); }
 .month.now { background: var(--accent); }
@@ -203,6 +206,9 @@ button, input, select { font: inherit; color: inherit; }
 .ledger td:last-child { text-align: right; }
 .ledger tr.total td { border-bottom: 0; border-top: 1px solid var(--ink-3); font-weight: 700; padding-top: 8px; }
 .ledger .empty { color: var(--ink-3); }
+.ledger tr.sect td { border-bottom: 0; padding-top: 10px; font-size: var(--t-xs); font-weight: 700; color: var(--ink-2); letter-spacing: 0.04em; }
+.ledger tr.sect:first-child td { padding-top: 0; }
+.ledger tr.sect .muted { font-weight: 400; letter-spacing: 0; margin-left: 4px; }
 .feed { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .feed li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; font-size: var(--t-sm); align-items: start; }
 .feed .tag { font-size: 0.6875rem; font-weight: 700; padding: 2px 6px; border-radius: 3px; margin-top: 2px; white-space: nowrap; background: var(--sheet-2); color: var(--ink-2); }
@@ -373,7 +379,7 @@ dialog::backdrop { background: rgba(10, 16, 14, 0.5); }
   min-width: 84px; text-align: center;
 }
 .grade.long { font-size: 2rem; padding: 14px 12px 10px; }
-.result-net .num { font-size: var(--t-2xl); font-weight: 700; line-height: 1.1; display: block; }
+.result-net .num { font-size: clamp(1.5rem, 7vw, 2.25rem); font-weight: 700; line-height: 1.1; display: block; white-space: nowrap; }
 .reveal { background: var(--sheet-2); border-radius: var(--radius); padding: 12px 14px; display: grid; gap: 6px; }
 .reveal .when { font-family: var(--f-display); font-size: clamp(1.1rem, 5vw, 1.5rem); line-height: 1.2; text-wrap: balance; }
 .bench { width: 100%; border-collapse: collapse; font-size: var(--t-sm); }
