@@ -724,6 +724,7 @@
         L.start = t;
         L.end = t + CONFIG.leaseMonths;
         L.renew = null;
+        L.renewed = true;
         return;
       }
       if (p.nextLease) {
@@ -755,7 +756,21 @@
       if (rand(st) >= pTenant(st, p, s.kind, s.ask)) return;
       var terms = leaseTerms(st, p, s.kind, s.ask);
       p.seeking = null;
-      if (p.lease) {
+      if (p.lease && p.lease.earlyOut) {
+        // 중도 퇴거: 새 세입자 보증금으로 기존 보증금을 바로 돌려준다. 중개수수료는 나가는 세입자 부담
+        var back = Math.max(0, p.lease.deposit - p.unpaid);
+        var delta = terms.deposit - back;
+        st.cash += delta;
+        flow(rep, '세입자 교체 보증금 차액', delta);
+        p.lease = { kind: terms.kind, deposit: terms.deposit, rent: terms.rent, start: st.turn, end: st.turn + CONFIG.leaseMonths, renew: null };
+        p.unpaid = 0;
+        p.defaultLeft = 0;
+        p.missed = 0;
+        p.evicting = false;
+        p.noRenew = false;
+        note(st, rep, propName(p) + ': 새 세입자가 들어와 중도 퇴거한 세입자에게 보증금을 돌려줬습니다. 보증금 차액 ' + fmt(delta, { plus: true }) +
+          ' · 중개수수료는 나간 세입자가 냈습니다.', delta >= 0 ? 'good' : 'warn', true);
+      } else if (p.lease) {
         p.nextLease = terms;
         var fee = money((terms.deposit + terms.rent * 100) * CONFIG.leaseFee);
         st.cash -= fee;
@@ -834,7 +849,6 @@
   }
 
   var EVICT_COST = 5e6;
-  var LAWSUIT_COST = 3e6;
 
   var PROP_EVENTS = {
     boiler: {
@@ -951,34 +965,52 @@
         }
       }
     },
+    // 처음 맺은 계약(갱신 전): 세입자는 만기 전에 보증금 반환을 요구할 권리가 없다. 집주인이 받아줄지 정한다.
     earlyLeave: {
       chance: function (st, p) {
-        return p.lease && p.lease.kind === 'jeonse' && p.lease.renew === null && p.lease.end - st.turn > 4 ? 0.004 * CONFIG.troubleRate : 0; // 연 5%
+        var L = p.lease;
+        return L && L.kind === 'jeonse' && !L.renewed && L.renew === null && !L.earlyOut && L.end - st.turn > 4 ? 0.004 * CONFIG.troubleRate : 0; // 연 5%
       },
       make: function (st, p) {
         return {
           title: '전세 세입자 중도 퇴거 요청',
-          body: propName(p) + ' 세입자가 급하게 이사해야 한다며 보증금 ' + fmt(p.lease.deposit) + '을 지금 돌려달라고 합니다. 만기는 ' +
-            (p.lease.end - st.turn) + '개월 남았습니다.',
+          body: propName(p) + ' 세입자가 급하게 이사해야 한다며 보증금 ' + fmt(p.lease.deposit) + '을 돌려달라고 합니다. 만기는 ' +
+            (p.lease.end - st.turn) + '개월 남았습니다. 처음 맺은 계약이라 세입자가 만기 전에 보증금을 요구할 법적 권리는 없습니다.',
           choices: [
-            { id: 'accept', label: '보증금을 돌려준다', hint: '현금으로 즉시 반환하고 새 세입자를 구합니다' },
-            { id: 'refuse', label: '계약대로 거절한다', hint: '대부분 받아들이지만 소송으로 갈 수 있습니다' }
+            { id: 'replace', label: '새 세입자가 들어오면 돌려준다', hint: '흔한 방식입니다. 새 세입자를 구하는 즉시 교체하고, 중개수수료는 나가는 세입자가 냅니다' },
+            { id: 'accept', label: '지금 바로 돌려준다', hint: '보증금 ' + fmt(p.lease.deposit) + '을 현금으로 반환하고 빈집으로 세입자를 구합니다' },
+            { id: 'refuse', label: '계약대로 거절한다', hint: '세입자는 만기까지 살지만 재계약은 하지 않습니다' }
           ]
         };
       },
       resolve: function (st, ev, choice, rep, p) {
         if (!p.lease) return;
-        if (choice === 'accept' || rand(st) < 0.3) {
-          if (choice !== 'accept') {
-            var cost = LAWSUIT_COST;
-            st.cash -= cost;
-            ledger(rep, '소송비', -cost);
-            note(st, rep, propName(p) + ': 세입자가 임차권등기 후 소송을 걸었습니다. 보증금 반환 판결, 소송비 ' + fmt(cost), 'bad', true);
-          }
+        if (choice === 'accept') {
           endLeaseMoveOut(st, rep, p);
+        } else if (choice === 'replace') {
+          p.lease.earlyOut = true;
+          p.lease.renew = false;
+          p.seeking = { kind: p.lease.kind, ask: 'market' };
+          note(st, rep, propName(p) + ': 새 세입자를 구하는 대로 교체합니다. 못 구하면 원래 만기에 나갑니다.', 'info');
         } else {
-          note(st, rep, propName(p) + ': 세입자가 만기까지 살기로 했습니다.', 'good');
+          p.noRenew = true;
+          note(st, rep, propName(p) + ': 계약대로 만기까지 살기로 했습니다. 만기에는 나갑니다.', 'info');
         }
+      }
+    },
+    // 갱신된 계약(계약갱신청구권·묵시적 갱신): 세입자는 언제든 해지 통보할 수 있고 3개월 뒤 효력 (주택임대차보호법 제6조의2)
+    noticeLeave: {
+      chance: function (st, p) {
+        var L = p.lease;
+        return L && L.renewed && L.renew === null && !L.earlyOut && L.end - st.turn > 4 ? 0.004 * CONFIG.troubleRate : 0;
+      },
+      auto: function (st, p, rep) {
+        var L = p.lease;
+        L.end = st.turn + 3;
+        L.renew = false;
+        p.seeking = { kind: L.kind, ask: 'market' };
+        note(st, rep, propName(p) + ': 갱신된 계약이라 세입자가 해지를 통보했습니다. 법에 따라 3개월 뒤 보증금 ' + fmt(L.deposit) +
+          '을 돌려줘야 합니다. 다음 세입자를 구하기 시작합니다.', 'warn', true);
       }
     },
     wallpaper: {
