@@ -457,7 +457,7 @@
   function newGame(seed) {
     if (seed == null) seed = (Date.now() ^ Math.floor(Math.random() * 4294967296)) | 0;
     var st = {
-      version: 4,
+      version: 5,
       seed: seed, rng: seed,
       turn: 0, turns: CONFIG.turns,
       cash: CONFIG.startCash,
@@ -556,7 +556,7 @@
       premium: 1, jPremium: 1,
       buyPrice: l.price, buyT: st.turn, buyCosts: q.tax + q.fee,
       loan: q.loan, lease: null, nextLease: null, seeking: null, selling: null,
-      redevHope: l.redevHope, rebuildHope: l.rebuildHope, redev: false,
+      redevHope: l.redevHope, rebuildHope: l.rebuildHope, projStage: 0, projDead: false,
       defaultLeft: 0, unpaid: 0, missed: 0, evicting: false, noRenew: false
     };
     st.cash -= q.need;
@@ -795,6 +795,29 @@
 
   /* ---------- 이벤트 ---------- */
 
+  // 정비사업 단계. p: 다음 단계로 갈 월 확률, up: 시세 배수, fail: 그 단계를 기다리는 동안 무산될 월 확률
+  var REDEV_STAGES = [
+    { name: '재개발 후보지 선정', p: 0.0005, up: [1.05, 1.08] },
+    { name: '재개발 정비구역 지정', p: 0.012, up: [1.06, 1.10], fail: 0.006, failMult: 0.9, failText: '주민 동의율을 못 채워 후보지에서 철회됐습니다' },
+    { name: '재개발 조합설립인가', p: 0.008, up: [1.04, 1.07], fail: 0.002, failMult: 0.88, failText: '조합 내분으로 정비구역이 해제됐습니다' }
+  ];
+  var REBUILD_STAGES = [
+    { name: '재건축 안전진단 통과', p: 0.001, up: [1.04, 1.07] },
+    { name: '재건축 정비구역 지정', p: 0.012, up: [1.04, 1.07], fail: 0.004, failMult: 0.93, failText: '정비계획이 반려돼 사업이 원점으로 돌아갔습니다' },
+    { name: '재건축 관리처분인가', p: 0.008, up: [1.05, 1.08], fail: 0.002, failMult: 0.92, failText: '공사비 갈등으로 사업이 멈췄습니다', levy: true }
+  ];
+  function projectStages(p) {
+    if (p.type === 'villa') return REDEV_STAGES;
+    return p.rebuildHope ? REBUILD_STAGES : null; // 구축 아파트만 재건축 대상
+  }
+  // 지금 단계 이름 (화면 표시용). 진행 전이면 null
+  function projectLabel(p) {
+    if (p.projDead) return { text: (p.type === 'villa' ? '재개발' : '재건축') + ' 무산', tone: 'bad' };
+    var stages = projectStages(p);
+    if (!stages || !p.projStage) return null;
+    return { text: stages[p.projStage - 1].name, tone: 'good' };
+  }
+
   var EVICT_COST = 5e6;
   var LAWSUIT_COST = 3e6;
 
@@ -1004,30 +1027,73 @@
         note(st, rep, propName(p) + ' 매수 제안 수락: ' + fmt(d.price) + '에 매도 · ' + d.label + (d.tax ? ' ' + fmt(d.tax) : '') + ' · 손에 쥔 돈 ' + fmt(net), 'good', true);
       }
     },
-    redev: {
-      chance: function (st, p) { return p.type === 'villa' && !p.redev ? (p.redevHope ? 0.0015 : 0.0003) : 0; },
+    projectUp: {
+      chance: function (st, p) {
+        var stages = projectStages(p);
+        if (!stages || p.projDead || p.projStage >= stages.length) return 0;
+        var pr = stages[p.projStage].p;
+        // 노후 빌라·구축 아파트가 아니면 첫 단계에 오를 확률이 1/5
+        if (p.projStage === 0 && !p.redevHope && !p.rebuildHope) pr *= 0.2;
+        return pr;
+      },
       auto: function (st, p, rep) {
-        var m = uni(st, 1.12, 1.25);
+        var stages = projectStages(p);
+        var sg = stages[p.projStage];
+        var m = uni(st, sg.up[0], sg.up[1]);
         p.premium *= m;
-        p.redev = true;
-        note(st, rep, '재개발 구역 지정: ' + propName(p) + ' 시세가 ' + pct(m - 1, 0) + ' 뛰었습니다. 전세 시세는 그대로라 갭이 벌어집니다.', 'good', true);
+        p.projStage += 1;
+        var next = stages[p.projStage];
+        note(st, rep, sg.name + ': ' + propName(p) + ' 시세 ' + pct(m - 1, 0) + '.' +
+          (next ? ' 다음 단계(' + next.name + ')까지 보통 몇 년이 걸리고, 그 사이 무산될 수도 있습니다.' : ''), 'good', true);
+        if (sg.levy) pushEvent(st, rep, 'levy', p);
       }
     },
-    redevCancel: {
-      chance: function (st, p) { return p.redev ? 0.006 : 0; },
+    projectFail: {
+      chance: function (st, p) {
+        var stages = projectStages(p);
+        if (!stages || p.projDead || p.projStage === 0 || p.projStage >= stages.length) return 0;
+        return stages[p.projStage].fail || 0;
+      },
       auto: function (st, p, rep) {
-        p.premium *= 0.88;
-        p.redev = false;
-        note(st, rep, '재개발 무산: 주민 반대로 ' + propName(p) + ' 일대 재개발이 해제됐습니다. 시세 -12%.', 'bad', true);
+        var sg = projectStages(p)[p.projStage];
+        p.premium *= sg.failMult;
+        p.projDead = true;
+        note(st, rep, (p.type === 'villa' ? '재개발' : '재건축') + ' 무산: ' + propName(p) + ' — ' + sg.failText + '. 시세 ' + pct(sg.failMult - 1, 0) + '.', 'bad', true);
       }
     },
-    rebuild: {
-      chance: function (st, p) { return p.rebuildHope ? 0.001 : 0; },
-      auto: function (st, p, rep) {
-        var m = uni(st, 1.06, 1.12);
-        p.premium *= m;
-        p.rebuildHope = false;
-        note(st, rep, '재건축 안전진단 통과: ' + propName(p) + ' 시세 ' + pct(m - 1, 0), 'good', true);
+    levy: {
+      chance: function () { return 0; }, // 관리처분인가 단계에 올라갈 때만 뜬다
+      make: function (st, p) {
+        var v = value(st, p);
+        var cost = money(v * uni(st, 0.1, 0.2));
+        return {
+          title: '재건축 추가 분담금 통보',
+          body: propName(p) + ' 재건축 조합이 관리처분계획을 확정하며 추가 분담금 ' + fmt(cost) + '을 통보했습니다. 내면 새 아파트 입주권을 지키고, ' +
+            '안 내면 조합에 현금청산(시세의 85%)으로 넘겨야 합니다.',
+          data: { cost: cost },
+          choices: [
+            { id: 'pay', label: '분담금을 낸다', hint: '현금 ' + fmt(cost) + ' 지출 · 시세가 분담금의 1.15배만큼 오릅니다' },
+            { id: 'cashout', label: '현금청산 받는다', hint: '시세의 85%로 조합에 넘깁니다' }
+          ]
+        };
+      },
+      resolve: function (st, ev, choice, rep, p) {
+        var cost = ev.data.cost;
+        if (choice === 'pay') {
+          var v = value(st, p);
+          st.cash -= cost;
+          flow(rep, '재건축 분담금 (집값에 반영)', -cost);
+          p.premium *= 1 + cost * 1.15 / v;
+          note(st, rep, propName(p) + ' 분담금 ' + fmt(cost) + ' 납부. 입주권을 지켰습니다.', 'info', true);
+        } else {
+          var price = money(value(st, p) * 0.85);
+          var tax = gainsTax(st, p, price, 0);
+          var debts = p.loan + deposit(p);
+          var net = sellProp(st, p, price, 0, tax.tax);
+          flow(rep, '현금청산 대금 (대출·보증금 정리 후)', price - debts);
+          if (tax.tax) ledger(rep, '양도소득세', -tax.tax);
+          note(st, rep, propName(p) + ' 현금청산: ' + fmt(price) + ' · 손에 쥔 돈 ' + fmt(net), 'warn', true);
+        }
       }
     },
     station: {
@@ -1335,7 +1401,7 @@
     gameRate: gameRate, depositRate: depositRate, ltv: ltv,
     pSale: pSale, pTenant: pTenant, leaseTerms: leaseTerms, saleEstimate: saleEstimate,
     acqTaxRate: acqTaxRate, result: result, propName: propName, listingName: listingName, preview: preview,
-    saleAsk: saleAsk, leaseAsk: leaseAsk, findProp: findProp,
+    saleAsk: saleAsk, leaseAsk: leaseAsk, findProp: findProp, projectLabel: projectLabel,
     minCash: minCash, affordable: affordable, cheapestNeed: cheapestNeed, syncListings: syncListings,
     fmt: fmt, pct: pct, ym: ym
   };

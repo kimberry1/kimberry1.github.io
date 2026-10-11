@@ -42,7 +42,7 @@
   function load() {
     try {
       var s = JSON.parse(localStorage.getItem(SAVE_KEY));
-      return s && s.version === 4 && s.series ? s : null;
+      return s && s.version === 5 && s.series ? s : null;
     } catch (e) { return null; }
   }
   function loadBest() {
@@ -138,7 +138,8 @@
       if (p.defaultLeft > 0) chips.push(['월세 미납', 'bad']);
     }
     if (p.selling) chips.push(['매도 중 · ' + E.saleAsk(p.selling.ask).label, 'info']);
-    if (p.redev) chips.push(['재개발 구역', 'good']);
+    var proj = E.projectLabel(p);
+    if (proj) chips.push([proj.text, proj.tone]);
     return { chips: chips, text: text };
   }
 
@@ -823,7 +824,7 @@
   }
 
   function start(data) {
-    st = (data && data.st && data.st.version === 4) ? data.st : (load() || E.newGame());
+    st = (data && data.st && data.st.version === 5) ? data.st : (load() || E.newGame());
     E.syncListings(st); // 이전 버전 저장본의 못 사는 매물 정리
     var howtoPref = null;
     try { howtoPref = localStorage.getItem(HOWTO_KEY); } catch (e) { /* 저장 불가 환경 */ }
