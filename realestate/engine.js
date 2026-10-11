@@ -273,9 +273,20 @@
     var a = leaseAsk(askId);
     var j = jeonseValue(st, p);
     if (kind === 'jeonse') return { kind: kind, deposit: money(j * a.f), rent: 0 };
-    var dep = money(j * 0.15);
+    var dep = wolseDepositFor(st, p);
     var conv = (gameRate(st, st.turn) + 1.5) / 100; // 전월세 전환율 = 대출 금리 + 1.5%p
-    return { kind: kind, deposit: dep, rent: money((j - dep) * conv / 12 * a.f) };
+    return { kind: kind, deposit: dep, rent: money(Math.max(0, j - dep) * conv / 12 * a.f) };
+  }
+
+  // 월세 보증금은 집마다 한 번 정하면 거의 안 바뀐다 (3천에 50이면 3천은 그대로, 월세만 오른다).
+  // 처음엔 전세 시세의 15%를 1천만 단위(1억 이상은 5천만 단위)로 맞춘다.
+  function wolseDepositFor(st, p) {
+    if (p.wolseDeposit) return p.wolseDeposit;
+    var d = jeonseValue(st, p) * 0.15;
+    return d < 1e8 ? Math.max(1e7, Math.round(d / 1e7) * 1e7) : Math.round(d / 5e7) * 5e7;
+  }
+  function fixWolseDeposit(p) {
+    if (p.lease && p.lease.kind === 'wolse' && !p.wolseDeposit) p.wolseDeposit = p.lease.deposit;
   }
 
   function pTenant(st, p, kind, askId) {
@@ -491,7 +502,7 @@
   function newGame(seed) {
     if (seed == null) seed = (Date.now() ^ Math.floor(Math.random() * 4294967296)) | 0;
     var st = {
-      version: 7,
+      version: 8,
       seed: seed, rng: seed,
       turn: 0, turns: CONFIG.turns,
       cash: CONFIG.startCash,
@@ -696,6 +707,7 @@
       kind: terms.kind, deposit: terms.deposit, rent: terms.rent,
       start: st.turn, end: st.turn + CONFIG.leaseMonths, renew: null
     };
+    fixWolseDeposit(p);
     ledger(rep, '임대 중개수수료', -fee);
     st.cash -= fee;
     var text = propName(p) + (terms.kind === 'jeonse'
@@ -750,20 +762,23 @@
       }
       if (t < L.end) return;
       if (L.renew) {
+        // 계약갱신청구권(5% 상한)은 세입자 한 명당 한 번뿐. 두 번째 재계약부터는 시세로 다시 정한다.
+        var claim = !L.usedClaim;
+        L.usedClaim = true;
         if (L.kind === 'jeonse') {
           var mkt = money(jeonseValue(st, p));
-          var nd = mkt >= L.deposit ? Math.min(money(L.deposit * 1.05), mkt) : mkt;
+          var nd = mkt >= L.deposit && claim ? Math.min(money(L.deposit * 1.05), mkt) : mkt;
           var diff = nd - L.deposit;
           var old = L.deposit;
           L.deposit = nd;
           if (diff >= 0) depositIn(st, rep, p, diff, '전세 보증금 증액분 받음');
           else depositOut(st, rep, p, -diff, '역전세 차액 반환');
           if (diff < 0) note(st, rep, propName(p) + ' 역전세: 전세 시세가 떨어져 재계약하며 보증금 차액 ' + fmt(-diff) + '을 돌려줬습니다.', 'bad', true);
-          else note(st, rep, propName(p) + ' 전세 재계약: 보증금 ' + fmt(old) + ' → ' + fmt(nd) + ' (5% 상한)', 'good');
+          else note(st, rep, propName(p) + ' 전세 재계약: 보증금 ' + fmt(old) + ' → ' + fmt(nd) + (claim ? ' (갱신청구권 사용, 5% 상한)' : ' (청구권을 이미 써서 시세로 재계약)'), 'good');
         } else {
           var terms = leaseTerms(st, p, 'wolse', 'market');
-          var nr = terms.rent >= L.rent ? Math.min(money(L.rent * 1.05), terms.rent) : terms.rent;
-          note(st, rep, propName(p) + ' 월세 재계약: 월 ' + fmt(L.rent) + ' → ' + fmt(nr), nr >= L.rent ? 'good' : 'bad');
+          var nr = terms.rent >= L.rent && claim ? Math.min(money(L.rent * 1.05), terms.rent) : terms.rent;
+          note(st, rep, propName(p) + ' 월세 재계약: 월 ' + fmt(L.rent) + ' → ' + fmt(nr) + (claim ? ' (갱신청구권, 5% 상한)' : ' (시세로 재계약)'), nr >= L.rent ? 'good' : 'bad');
           L.rent = nr;
         }
         L.start = t;
@@ -777,6 +792,7 @@
         // 새 보증금을 받고, 기존 보증금에서 밀린 월세를 뺀 만큼 돌려준다
         var delta = n.deposit - Math.max(0, L.deposit - p.unpaid);
         p.lease = { kind: n.kind, deposit: n.deposit, rent: n.rent, start: t, end: t + CONFIG.leaseMonths, renew: null };
+        fixWolseDeposit(p);
         if (delta >= 0) depositIn(st, rep, p, delta, '세입자 교체 보증금 차액');
         else depositOut(st, rep, p, -delta, '세입자 교체 보증금 차액');
         p.nextLease = null;
@@ -806,6 +822,7 @@
         var back = Math.max(0, p.lease.deposit - p.unpaid);
         var delta = terms.deposit - back;
         p.lease = { kind: terms.kind, deposit: terms.deposit, rent: terms.rent, start: st.turn, end: st.turn + CONFIG.leaseMonths, renew: null };
+        fixWolseDeposit(p);
         if (delta >= 0) depositIn(st, rep, p, delta, '세입자 교체 보증금 차액');
         else depositOut(st, rep, p, -delta, '세입자 교체 보증금 차액');
         p.unpaid = 0;

@@ -46,7 +46,7 @@
   function load() {
     try {
       var s = JSON.parse(localStorage.getItem(SAVE_KEY));
-      return s && s.version === 7 && s.series ? s : null;
+      return s && s.version === 8 && s.series ? s : null;
     } catch (e) { return null; }
   }
   function loadBest() {
@@ -1211,7 +1211,7 @@
   }
 
   function start(data) {
-    st = (data && data.st && data.st.version === 7) ? data.st : (load() || E.newGame());
+    st = (data && data.st && data.st.version === 8) ? data.st : (load() || E.newGame());
     E.syncListings(st); // 이전 버전 저장본의 못 사는 매물 정리
     try { tab = TABS.indexOf(localStorage.getItem(TAB_KEY)) >= 0 ? localStorage.getItem(TAB_KEY) : 'home'; } catch (e) { tab = 'home'; }
     bind();
