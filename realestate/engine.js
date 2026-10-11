@@ -29,17 +29,17 @@
     penaltyRate: 12,       // 연체 이자율 (연 %)
     listingCount: 6,
     maxEventsPerTurn: 3,
-    troubleRate: 2.5,      // 누수·미납·퇴거 같은 골칫거리 이벤트 빈도 배수
+    troubleRate: 1.0,      // 골칫거리 이벤트 빈도 배수 (아래 확률은 연간 발생률을 월로 나눈 현실 기준치)
     marketEventChance: 0.25, // 매달 시장 전체 사건이 일어날 확률
     evictAfter: 3          // 월세가 이 개월 수만큼 밀리면 명도소송 여부를 묻는다
   };
 
   var KINDS = {
     // base: 동네 계수 1.0 기준 시작 시세 (아파트 전용 84㎡ 준신축, 빌라 52㎡ 구축)
-    'gn-apt':   { region: 'gn', type: 'apt',   label: '강남 아파트', base: 15e8,  jeonseRatio: 0.45, sale: 1.0,  tenant: 1.0, rentDefault: 0.008, repair: 1.0 },
-    'gb-apt':   { region: 'gb', type: 'apt',   label: '강북 아파트', base: 9e8,   jeonseRatio: 0.55, sale: 1.0,  tenant: 1.0, rentDefault: 0.008, repair: 1.0 },
-    'gn-villa': { region: 'gn', type: 'villa', label: '강남 빌라',   base: 4.5e8, jeonseRatio: 0.72, sale: 0.55, tenant: 0.8, rentDefault: 0.018, repair: 1.3 },
-    'gb-villa': { region: 'gb', type: 'villa', label: '강북 빌라',   base: 3e8,   jeonseRatio: 0.78, sale: 0.55, tenant: 0.8, rentDefault: 0.018, repair: 1.3 }
+    'gn-apt':   { region: 'gn', type: 'apt',   label: '강남 아파트', base: 15e8,  jeonseRatio: 0.45, sale: 1.0,  tenant: 1.0, rentDefault: 0.004, repair: 1.0 },
+    'gb-apt':   { region: 'gb', type: 'apt',   label: '강북 아파트', base: 9e8,   jeonseRatio: 0.55, sale: 1.0,  tenant: 1.0, rentDefault: 0.004, repair: 1.0 },
+    'gn-villa': { region: 'gn', type: 'villa', label: '강남 빌라',   base: 4.5e8, jeonseRatio: 0.72, sale: 0.55, tenant: 0.8, rentDefault: 0.009, repair: 1.3 },
+    'gb-villa': { region: 'gb', type: 'villa', label: '강북 빌라',   base: 3e8,   jeonseRatio: 0.78, sale: 0.55, tenant: 0.8, rentDefault: 0.009, repair: 1.3 }
   };
   var KIND_ORDER = ['gn-apt', 'gb-apt', 'gn-villa', 'gb-villa'];
   var REGION_LABEL = { gn: '강남', gb: '강북' };
@@ -823,7 +823,7 @@
 
   var PROP_EVENTS = {
     boiler: {
-      chance: function (st, p) { return 0.008 * CONFIG.troubleRate; },
+      chance: function (st, p) { return 0.012 * CONFIG.troubleRate; }, // 연 14%
       make: function (st, p) {
         var replace = rand(st) < 0.4;
         var cost = money(replace ? uni(st, 80e4, 150e4) : uni(st, 15e4, 50e4));
@@ -852,7 +852,7 @@
       }
     },
     leak: {
-      chance: function (st, p) { return 0.005 * KINDS[p.kind].repair * CONFIG.troubleRate; },
+      chance: function (st, p) { return 0.0035 * KINDS[p.kind].repair * CONFIG.troubleRate; }, // 아파트 연 4%, 빌라 연 5.4%
       make: function (st, p) {
         var cost = money(uni(st, 50e4, 200e4));
         return {
@@ -892,7 +892,7 @@
       },
       auto: function (st, p, rep) {
         var r = rand(st);
-        p.defaultLeft = r < 0.5 ? 2 : r < 0.8 ? 5 : 999; // 999: 소송 전까지 계속 안 낸다
+        p.defaultLeft = r < 0.55 ? 2 : r < 0.85 ? 5 : 999; // 999: 소송 전까지 계속 안 낸다
         p.missed = 0;
         note(st, rep, propName(p) + ' 월세 미납: 세입자가 다음 달부터 월세 ' + fmt(p.lease.rent) + '를 못 내겠다고 합니다. ' +
           CONFIG.evictAfter + '개월 넘게 밀리면 명도소송을 검토하게 됩니다.', 'warn', true);
@@ -938,7 +938,7 @@
     },
     earlyLeave: {
       chance: function (st, p) {
-        return p.lease && p.lease.kind === 'jeonse' && p.lease.renew === null && p.lease.end - st.turn > 4 ? 0.005 * CONFIG.troubleRate : 0;
+        return p.lease && p.lease.kind === 'jeonse' && p.lease.renew === null && p.lease.end - st.turn > 4 ? 0.004 * CONFIG.troubleRate : 0; // 연 5%
       },
       make: function (st, p) {
         return {
@@ -967,7 +967,7 @@
       }
     },
     wallpaper: {
-      chance: function (st, p) { return p.lease && !p.noRenew && !p.defaultLeft ? 0.006 * CONFIG.troubleRate : 0; },
+      chance: function (st, p) { return p.lease && !p.noRenew && !p.defaultLeft ? 0.007 * CONFIG.troubleRate : 0; }, // 연 8%
       make: function (st, p) {
         var cost = money(p.m2 * uni(st, 1.5e4, 3.5e4)); // 84㎡ 기준 130~290만
         return {
@@ -1097,21 +1097,21 @@
       }
     },
     station: {
-      chance: function () { return 0.0005; },
+      chance: function () { return 0.0003; }, // 10년에 3.5%
       auto: function (st, p, rep) {
         p.premium *= 1.05;
         note(st, rep, '역 신설 확정: ' + propName(p) + ' 인근에 지하철역이 들어섭니다. 시세 +5%.', 'good', true);
       }
     },
     noise: {
-      chance: function (st, p) { return p.lease && !p.noRenew ? 0.006 * CONFIG.troubleRate : 0; },
+      chance: function (st, p) { return p.lease && !p.noRenew ? 0.0035 * CONFIG.troubleRate : 0; }, // 연 4%
       auto: function (st, p, rep) {
         p.noRenew = true;
         note(st, rep, propName(p) + ': 층간소음 분쟁으로 세입자가 만기에 나가겠다고 합니다.', 'warn');
       }
     },
     fire: {
-      chance: function () { return 0.0006; },
+      chance: function () { return 0.00005; }, // 연 0.06% (주택 화재율 수준)
       auto: function (st, p, rep) {
         var cost = money(p.m2 * uni(st, 20e4, 50e4)); // 84㎡ 기준 1,700~4,200만
         st.cash -= cost;
