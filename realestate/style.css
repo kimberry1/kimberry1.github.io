@@ -277,6 +277,7 @@ button, input, select { font: inherit; color: inherit; }
 .mods { margin-top: 10px; }
 
 /* ---------- 매물 전단 ---------- */
+.listings > .empty-state { grid-column: 1 / -1; }
 .listings { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 210px), 1fr)); gap: 10px; }
 .flyer { position: relative; border: 1px solid var(--rule); border-radius: var(--radius); padding: 12px; display: flex; flex-direction: column; gap: 6px; background: var(--sheet); min-width: 0; }
 .flyer .where { font-size: var(--t-xs); color: var(--ink-3); }
@@ -500,3 +501,22 @@ dialog::backdrop { background: rgba(10, 16, 14, 0.5); }
 .share-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .share-row .btn { flex: 1 1 auto; }
 .share-msg { font-size: var(--t-xs); color: var(--accent); min-height: 1em; }
+
+/* ---------- 현금 변화 내역 ---------- */
+.cb-rows { display: grid; gap: 6px; }
+.cb-row { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) auto; gap: 8px; align-items: center; font-size: var(--t-sm); }
+.cb-row .lab { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
+.cb-row .lab small { font-size: 0.6875rem; color: var(--ink-3); }
+.cb-bar { height: 8px; border-radius: 2px; background: var(--sheet-2); overflow: hidden; }
+.cb-bar i { display: block; height: 100%; border-radius: 2px; }
+.cb-row .amt { font-weight: 600; text-align: right; white-space: nowrap; }
+.sub-head { display: flex; align-items: baseline; gap: 6px; font-size: var(--t-sm); font-weight: 700; color: var(--ink-2); border-top: 1px solid var(--rule); padding-top: 10px; }
+.sub-head .num { font-size: var(--t-md); }
+.liq { font-size: var(--t-sm); color: var(--ink-2); background: var(--sheet-2); border-radius: var(--radius); padding: 6px 10px; }
+.liq b { color: var(--ink); }
+
+/* ---------- 매물 필터 ---------- */
+.listings-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+.filter-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.fchip { appearance: none; border: 1px solid var(--rule); background: var(--sheet); color: var(--ink-2); border-radius: 999px; padding: 5px 10px; font-size: var(--t-xs); font-weight: 600; cursor: pointer; }
+.fchip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }

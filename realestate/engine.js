@@ -29,6 +29,7 @@
     auctionRatio: 0.7,
     penaltyRate: 12,       // 연체 이자율 (연 %)
     listingCount: 6,
+    refreshPerMonth: 3,    // 한 달에 매물을 새로 볼 수 있는 횟수
     maxEventsPerTurn: 3,
     troubleRate: 1.0,      // 골칫거리 이벤트 빈도 배수 (아래 확률은 연간 발생률을 월로 나눈 현실 기준치)
     marketEventChance: 0.25, // 매달 시장 전체 사건이 일어날 확률
@@ -314,11 +315,13 @@
     return tax;
   }
 
-  function gainsTax(st, p, salePrice, fee) {
+  // count: 이 집을 팔 때 보유한 주택 수 (기본은 지금 보유 수). 1이면 1주택 비과세 규칙을 따른다.
+  function gainsTax(st, p, salePrice, fee, count) {
     var gain = salePrice - fee - p.buyPrice - p.buyCosts;
     var held = st.turn - p.buyT;
+    if (count == null) count = st.props.length;
     if (gain <= 0) return { tax: 0, label: '양도차익 없음', gain: gain };
-    if (st.props.length === 1 && held >= 24) {
+    if (count === 1 && held >= 24) {
       if (salePrice <= 12e8) return { tax: 0, label: '1주택 2년 보유 비과세', gain: gain };
       // 고가주택: 12억 초과분 비율만큼만 과세, 장기보유특별공제 연 8% (최대 80%)
       var yrs = Math.floor(held / 12);
@@ -426,17 +429,18 @@
 
   // 일반 매물을 '지금 살 수 있는 것'으로 맞춘다: 못 사는 건 빼고, 종류별로 하나씩 우선 채운 뒤 남는 자리를 채운다.
   function syncListings(st) {
-    var regular = st.listings.filter(function (l) { return !l.tag && affordable(st, l); });
+    var kinds = st.filter && st.filter !== 'all' ? [st.filter] : KIND_ORDER;
+    var regular = st.listings.filter(function (l) { return !l.tag && affordable(st, l) && kinds.indexOf(l.kind) >= 0; });
     var specials = st.listings.filter(function (l) { return l.tag && l.until >= st.turn; });
     if (!st.over) {
       var open = [];
-      KIND_ORDER.forEach(function (kind) {
+      kinds.forEach(function (kind) {
         if (regular.length >= CONFIG.listingCount) return;
         if (regular.some(function (l) { return l.kind === kind; })) { open.push(kind); return; }
         var l = makeAffordable(st, kind);
         if (l) { regular.push(l); open.push(kind); }
       });
-      for (var guard = 0; open.length && regular.length < CONFIG.listingCount && guard < 8; guard++) {
+      for (var guard = 0; open.length && regular.length < CONFIG.listingCount && guard < 12; guard++) {
         var extra = makeAffordable(st, pick(st, open));
         if (extra) regular.push(extra);
       }
@@ -449,6 +453,21 @@
     st.listings = st.listings.filter(function (l) { return l.tag; });
     syncListings(st);
   }
+
+  // 매물 종류 필터 ('all' 또는 KINDS 키). 바꾸면 그 종류로 다시 채운다.
+  function setFilter(st, kind) {
+    st.filter = kind === 'all' || KINDS[kind] ? kind : 'all';
+    syncListings(st);
+  }
+  // 이번 달 매물 새로 보기 (한 달에 CONFIG.refreshPerMonth번)
+  function refreshByPlayer(st) {
+    if (st.over || refreshLeft(st) <= 0) return false;
+    st.refreshUsed = { t: st.turn, n: refreshUsedNow(st) + 1 };
+    refreshListings(st);
+    return true;
+  }
+  function refreshUsedNow(st) { return st.refreshUsed && st.refreshUsed.t === st.turn ? st.refreshUsed.n : 0; }
+  function refreshLeft(st) { return CONFIG.refreshPerMonth - refreshUsedNow(st); }
 
   function listingName(l) { return l.dong + ' ' + TYPE_LABEL[l.type]; }
 
@@ -468,7 +487,7 @@
   function newGame(seed) {
     if (seed == null) seed = (Date.now() ^ Math.floor(Math.random() * 4294967296)) | 0;
     var st = {
-      version: 6,
+      version: 7,
       seed: seed, rng: seed,
       turn: 0, turns: CONFIG.turns,
       cash: CONFIG.startCash,
@@ -644,7 +663,7 @@
     if (amount <= 0) return 0;
     st.cash += amount;
     flow(rep, label, amount);
-    var r = Math.min(p.loan, amount);
+    var r = Math.min(p.loan, amount, Math.max(0, st.cash)); // 현금이 마이너스(연체)면 그것부터 메운다
     if (r > 0) {
       p.loan -= r;
       st.cash -= r;
@@ -874,7 +893,7 @@
 
   var PROP_EVENTS = {
     boiler: {
-      chance: function (st, p) { return 0.012 * CONFIG.troubleRate; }, // 연 14%
+      chance: function (st, p) { return 0.007 * CONFIG.troubleRate; }, // 보일러·누수·도배장판 합쳐 집마다 5년에 한 번꼴
       make: function (st, p) {
         var replace = rand(st) < 0.4;
         var cost = money(replace ? uni(st, 80e4, 150e4) : uni(st, 15e4, 50e4));
@@ -903,7 +922,7 @@
       }
     },
     leak: {
-      chance: function (st, p) { return 0.0035 * KINDS[p.kind].repair * CONFIG.troubleRate; }, // 아파트 연 4%, 빌라 연 5.4%
+      chance: function (st, p) { return 0.004 * KINDS[p.kind].repair * CONFIG.troubleRate; },
       make: function (st, p) {
         var cost = money(uni(st, 50e4, 200e4));
         return {
@@ -1036,7 +1055,7 @@
       }
     },
     wallpaper: {
-      chance: function (st, p) { return p.lease && !p.noRenew && !p.defaultLeft ? 0.007 * CONFIG.troubleRate : 0; }, // 연 8%
+      chance: function (st, p) { return p.lease && !p.noRenew && !p.defaultLeft ? 0.005 * CONFIG.troubleRate : 0; },
       make: function (st, p) {
         var cost = money(p.m2 * uni(st, 1.5e4, 3.5e4)); // 84㎡ 기준 130~290만
         return {
@@ -1450,8 +1469,29 @@
         jeonse = nd;
       }
     }
-    var hold = price * S(st, 'gnApt', N) / S(st, 'gnApt', 0) - jeonse + cash;
+    // 마지막에 팔았다고 보고 수수료와 1주택 양도세를 뗀다 (게임 점수와 같은 기준)
+    var fp = money(price * S(st, 'gnApt', N) / S(st, 'gnApt', 0));
+    var fee = money(fp * CONFIG.sellFee);
+    var pseudo = { buyPrice: price, buyCosts: price * (acqTaxRate(1, price) + CONFIG.buyFee), buyT: 0 };
+    var tax = gainsTax({ turn: N, props: [pseudo] }, pseudo, fp, fee, 1).tax;
+    var hold = fp - fee - tax - jeonse + cash;
     return { deposit: money(dep), gangnamHold: money(hold) };
+  }
+
+  // 지금 전부 판다면: 이익이 적은 집부터 팔고(마지막 한 채는 1주택 규칙), 중개수수료·양도세를 뗀 순자산
+  function liquidation(st) {
+    var order = st.props.slice().sort(function (a, b) {
+      return (value(st, a) - a.buyPrice) - (value(st, b) - b.buyPrice);
+    });
+    var fee = 0, tax = 0;
+    order.forEach(function (p, i) {
+      var price = money(value(st, p));
+      var f = money(price * CONFIG.sellFee);
+      fee += f;
+      tax += gainsTax(st, p, price, f, order.length - i).tax;
+    });
+    var book = netWorth(st);
+    return { book: book, fee: fee, tax: tax, net: book - fee - tax };
   }
 
   function grade(mult, bankrupt) {
@@ -1466,7 +1506,8 @@
   }
 
   function result(st) {
-    var net = st.bankrupt ? Math.min(0, st.cash) : netWorth(st);
+    var liq = liquidation(st);
+    var net = st.bankrupt ? Math.min(0, st.cash) : liq.net;
     var from = ym(st.startIdx), to = ym(st.startIdx + st.turns);
     // 게임 기간과 3개월 이상 겹치는 시기만 보여준다
     var eras = ERAS.filter(function (e) {
@@ -1480,6 +1521,7 @@
       grade: grade(net / CONFIG.startCash, st.bankrupt),
       from: from, to: to, eras: eras,
       benchmarks: b,
+      liquidation: liq,
       gnChange: S(st, 'gnApt', st.turns) / 100 - 1,
       gbChange: S(st, 'gbApt', st.turns) / 100 - 1
     };
@@ -1500,6 +1542,7 @@
     acqTaxRate: acqTaxRate, result: result, grade: grade, propName: propName, listingName: listingName, preview: preview,
     saleAsk: saleAsk, leaseAsk: leaseAsk, findProp: findProp, projectLabel: projectLabel,
     minCash: minCash, affordable: affordable, cheapestNeed: cheapestNeed, syncListings: syncListings,
+    setFilter: setFilter, refreshByPlayer: refreshByPlayer, refreshLeft: refreshLeft, liquidation: liquidation,
     fmt: fmt, pct: pct, ym: ym
   };
 

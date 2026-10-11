@@ -46,7 +46,7 @@
   function load() {
     try {
       var s = JSON.parse(localStorage.getItem(SAVE_KEY));
-      return s && s.version === 6 && s.series ? s : null;
+      return s && s.version === 7 && s.series ? s : null;
     } catch (e) { return null; }
   }
   function loadBest() {
@@ -252,12 +252,27 @@
       return;
     }
     $('listings-aside').textContent = '현금 ' + fmt(st.cash) + '으로 살 수 있는 매물';
+    var left = E.refreshLeft(st);
+    var filter = st.filter || 'all';
+    $('listings-tools').innerHTML = '<div class="filter-chips" role="radiogroup" aria-label="매물 종류">' +
+      [['all', '전체']].concat(E.KIND_ORDER.map(function (k) { return [k, E.KINDS[k].label]; })).map(function (f) {
+        return '<button type="button" class="fchip" data-filter="' + f[0] + '" aria-pressed="' + (filter === f[0]) + '">' + f[1] + '</button>';
+      }).join('') + '</div>' +
+      '<button type="button" class="btn small" id="btn-refresh"' + (left > 0 ? '' : ' disabled') + '>새로 보기 ' + left + '/' + E.CONFIG.refreshPerMonth + '</button>';
+    var regularCount = st.listings.filter(function (l) { return !l.tag; }).length;
+    var filterNote = filter !== 'all' && !regularCount
+      ? '<div class="empty-state"><b>지금 현금으로 살 수 있는 ' + esc(E.KINDS[filter].label) + '가 없습니다.</b><span>다른 종류를 보거나, 현금이 늘어나면 다시 나옵니다.</span></div>'
+      : '';
+    if (!st.listings.length && filterNote) {
+      $('listings').innerHTML = filterNote;
+      return;
+    }
     if (!st.listings.length) {
       $('listings').innerHTML = '<div class="empty-state"><b>지금 현금으로 살 수 있는 매물이 없습니다.</b><span>가장 싼 매물도 대출을 한도까지 받았을 때 현금이 최소 ' +
         esc(fmt(E.cheapestNeed(st))) + ' 필요합니다. 집을 팔거나, 추가 대출을 받거나, 세입자 보증금이 들어오면 매물이 다시 나옵니다.</span></div>';
       return;
     }
-    $('listings').innerHTML = st.listings.map(function (l) {
+    $('listings').innerHTML = filterNote + st.listings.map(function (l) {
       var j = E.jeonseValue(st, E.preview(st, l.id));
       var hope = l.redevHope ? ' · 재개발 기대' : l.rebuildHope ? ' · 재건축 기대' : '';
       var need = E.minCash(st, l.price);
@@ -620,8 +635,13 @@
       }).join('');
       dlgBody.innerHTML = '<div class="dlg">' +
         '<div class="result-hero"><div class="grade' + (long ? ' long' : '') + '">' + esc(r.grade) + '</div>' +
-        '<div class="result-net"><div class="eyebrow">' + (st.bankrupt ? '파산 · ' + st.turn + '개월차' : st.turns + '개월 후 최종 순자산') + '</div>' +
+        '<div class="result-net"><div class="eyebrow">' + (st.bankrupt ? '파산 · ' + st.turn + '개월차' : st.turns + '개월 후 · 전부 팔고 세금 낸 뒤') + '</div>' +
         '<span class="num">' + esc(fmt(r.net)) + '</span><span class="muted">종잣돈 ' + esc(fmt(E.CONFIG.startCash)) + '의 ' + r.mult.toFixed(2) + '배</span></div></div>' +
+        (r.liquidation && (r.liquidation.tax || r.liquidation.fee) && !st.bankrupt ?
+          '<table class="kv"><tbody><tr><td>장부 순자산 (현금 + 시세 − 대출 − 보증금)</td><td>' + money(r.liquidation.book) + '</td></tr>' +
+          '<tr><td>전부 매도 시 양도세</td><td>' + money(-r.liquidation.tax) + '</td></tr>' +
+          '<tr><td>매도 중개수수료</td><td>' + money(-r.liquidation.fee) + '</td></tr>' +
+          '<tr class="total"><td>최종 순자산 (점수)</td><td>' + money(r.net) + '</td></tr></tbody></table>' : '') +
         '<div class="reveal"><div class="eyebrow">이번 판의 서울은</div><div class="when">' + r.from.y + '년 ' + r.from.m + '월 ~ ' + r.to.y + '년 ' + r.to.m + '월</div>' +
         '<div class="chips">' + r.eras.map(function (e) { return chipHtml([e, '']); }).join('') + '</div>' +
         '<div class="sub">같은 기간 강남 아파트 <span class="' + cls(r.gnChange) + '">' + pct(r.gnChange) + '</span>, 강북 아파트 <span class="' + cls(r.gbChange) + '">' + pct(r.gbChange) + '</span></div></div>' +
@@ -889,7 +909,8 @@
     var prev = hist.length > 1 ? hist[hist.length - 2].net : start;
     var d = tot.net / start - 1;
     var dm = tot.net - prev;
-    var g = E.grade(tot.net / start, false);
+    var liq = E.liquidation(st);
+    var g = E.grade(liq.net / start, false);
 
     // 1. 순자산
     $('card-net').innerHTML =
@@ -897,6 +918,7 @@
       '<div class="big num" id="d-net">' + esc(fmt(tot.net)) + '</div>' +
       '<div class="kpi-sub"><span>시작 대비 <span class="num ' + cls(d) + '">' + pct(d) + '</span></span>' +
       '<span>지난달 대비 <span class="num ' + cls(dm) + '">' + esc(fmt(dm, { plus: true })) + '</span></span></div>' +
+      (st.props.length ? '<div class="liq">지금 다 팔면 <b class="num">' + esc(fmt(liq.net)) + '</b> <span class="muted">양도세 ' + esc(fmt(liq.tax)) + ' · 수수료 ' + esc(fmt(liq.fee)) + ' 차감 · 최종 점수 기준</span></div>' : '') +
       '<div class="chart small" id="net-mini"></div>';
     var ticks = [];
     for (var t = 0; t < hist.length; t += 12) ticks.push({ i: t, label: t === 0 ? '시작' : t / 12 + '년' });
@@ -965,9 +987,25 @@
       runway = '아직 들어오고 나가는 돈이 없습니다';
     }
     var nextTax = 12 - (st.turn % 12);
+    var cb = cashBreakdown(st.report);
+    var span = st.report.span ? st.report.span[0] + '~' + st.report.span[1] + '개월차' : st.report.t === 0 ? '출발 후' : st.report.t + '개월차';
+    var cbMax = Math.max(1, Math.abs(cb.pl), Math.abs(cb.dep), Math.abs(cb.loan), Math.abs(cb.trade));
+    function cbRow(label, sub, v, color) {
+      return '<div class="cb-row"><span class="lab">' + label + '<small>' + sub + '</small></span>' +
+        '<span class="cb-bar"><i style="width: ' + (Math.abs(v) / cbMax * 100).toFixed(1) + '%; background: var(' + color + ')"></i></span>' +
+        '<span class="num amt ' + cls(v) + '">' + esc(fmt(v, { plus: true })) + '</span></div>';
+    }
     $('card-flow').innerHTML =
-      '<div class="card-head"><h2>월 현금흐름</h2><span class="aside muted">다음 달 예상</span></div>' +
-      '<div class="big num ' + cls(tot.flow) + '" id="d-flow">' + esc(fmt(tot.flow, { plus: true })) + '<small>/월</small></div>' +
+      '<div class="card-head"><h2>현금흐름</h2><span class="aside muted">' + span + ' 실제</span></div>' +
+      '<div class="big num ' + cls(cb.total) + '" id="d-flow">' + esc(fmt(cb.total, { plus: true })) + '<small>현금 변화</small></div>' +
+      '<div class="cb-rows">' +
+      cbRow('손익', '월세·이자·세금·수리비', cb.pl, cb.pl >= 0 ? '--up' : '--down') +
+      cbRow('보증금', '세입자에게 받은 돈·돌려준 돈', cb.dep, '--mix-dep') +
+      cbRow('대출', '받은 대출·갚은 대출', cb.loan, '--mix-loan') +
+      (cb.trade ? cbRow('매매', '집 사고판 대금', cb.trade, '--mix-eq') : '') +
+      '</div>' +
+      (cb.dep > 0 ? '<div class="kpi-sub muted">보증금은 세입자에게 빌린 돈이라 현금이 늘어도 순자산은 그대로입니다.</div>' : '') +
+      '<div class="sub-head">다음 달 예상 <span class="num ' + cls(tot.flow) + '">' + esc(fmt(tot.flow, { plus: true })) + '</span><span class="muted">/월</span></div>' +
       '<div class="flow-rows">' +
       '<div class="flow-row"><span class="lab">들어오는 돈</span><div class="track">' +
       (tot.rent ? '<span style="width: ' + (tot.rent / sc * 100).toFixed(2) + '%; background: var(--mix-eq)"></span>' : '') + '</div>' +
@@ -981,14 +1019,14 @@
       '</div>' +
       '<div class="runway ' + rtone + '">' + esc(runway) + '</div>' +
       (st.props.length ? '<div class="kpi-sub muted">보유세 연 ' + esc(fmt(tot.holdingYear)) + ' · ' + nextTax + '개월 뒤 납부</div>' : '') +
-      '<div class="bars-title">최근 24개월 월별 손익 (이자·월세·세금·수리비 등)</div><div class="chart" id="pl-bars"></div>';
+      '<div class="bars-title">최근 24개월 월별 손익</div><div class="chart" id="pl-bars"></div>';
     var recent = hist.slice(-24);
     barChart($('pl-bars'), {
       values: recent.map(function (h) { return h.pl; }),
       labels: recent.map(function (h) { return h.t === 0 ? '시작' : h.t + '개월차'; }),
-      height: 64
+      height: 64, slots: 24
     });
-    bump('d-flow', tot.flow);
+    bump('d-flow', cb.total);
 
     // 경고 띠
     var al = $('alert');
@@ -1006,6 +1044,19 @@
     }
   }
 
+  // 정산서의 현금 변화를 손익·보증금·대출·매매로 나눈다
+  function cashBreakdown(r) {
+    var out = { pl: 0, dep: 0, loan: 0, trade: 0 };
+    (r.ledger || []).forEach(function (x) { out.pl += x.amount; });
+    (r.flows || []).forEach(function (x) {
+      if (x.label.indexOf('대출') >= 0) out.loan += x.amount;
+      else if (x.label.indexOf('대금') >= 0 || x.label.indexOf('분담금') >= 0) out.trade += x.amount;
+      else out.dep += x.amount;
+    });
+    out.total = out.pl + out.dep + out.loan + out.trade;
+    return out;
+  }
+
   /* ---------- 막대 그래프 (월별 손익) ---------- */
 
   function barChart(el, cfg) {
@@ -1013,7 +1064,8 @@
     var W = Math.max(240, Math.round(el.clientWidth || 300));
     var H = cfg.height || 64;
     var vals = cfg.values;
-    var n = Math.max(vals.length, 1);
+    var n = Math.max(vals.length, cfg.slots || 1);
+    var off = n - vals.length; // 값이 적을 때는 오른쪽부터 채운다
     var lo = Math.min(0, Math.min.apply(null, vals)), hi = Math.max(0, Math.max.apply(null, vals));
     if (hi - lo < 1) hi = lo + 1;
     var pad = { t: 4, b: 4 };
@@ -1025,19 +1077,20 @@
     vals.forEach(function (v, i) {
       var y0 = y(0), y1 = y(v);
       var top = Math.min(y0, y1), h = Math.max(1, Math.abs(y1 - y0));
-      o.push('<rect x="' + (i * slot + 1).toFixed(1) + '" y="' + top.toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + h.toFixed(1) + '" rx="1.5" style="fill: var(' + (v >= 0 ? '--up' : '--down') + ')"></rect>');
+      o.push('<rect x="' + ((i + off) * slot + 1).toFixed(1) + '" y="' + top.toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + h.toFixed(1) + '" rx="1.5" style="fill: var(' + (v >= 0 ? '--up' : '--down') + ')"></rect>');
     });
     o.push('<rect class="hit" x="0" y="0" width="' + W + '" height="' + H + '" fill="transparent"></rect></svg><div class="chart-tip" hidden></div>');
     el.innerHTML = o.join('');
     var svg = el.querySelector('svg'), tip = el.querySelector('.chart-tip');
     function show(ev) {
       var rect = svg.getBoundingClientRect();
-      var i = Math.max(0, Math.min(vals.length - 1, Math.floor((ev.clientX - rect.left) / rect.width * n)));
-      if (!vals.length) return;
+      var i = Math.floor((ev.clientX - rect.left) / rect.width * n) - off;
+      if (!vals.length || i < 0) { tip.hidden = true; return; }
+      i = Math.min(vals.length - 1, i);
       tip.innerHTML = '<div><b>' + esc(cfg.labels[i]) + '</b></div><div class="num ' + cls(vals[i]) + '">' + esc(fmt(vals[i], { plus: true })) + '</div>';
       tip.hidden = false;
-      var left = (i + 0.5) * rect.width / n + 10;
-      if (left + tip.offsetWidth > rect.width) left = (i + 0.5) * rect.width / n - tip.offsetWidth - 10;
+      var left = (i + off + 0.5) * rect.width / n + 10;
+      if (left + tip.offsetWidth > rect.width) left = (i + off + 0.5) * rect.width / n - tip.offsetWidth - 10;
       tip.style.left = Math.max(0, left) + 'px';
       tip.style.top = '0px';
     }
@@ -1141,6 +1194,9 @@
       b.addEventListener('click', function () { setTab(b.getAttribute('data-go')); });
     });
     document.addEventListener('click', function (e) {
+      var f = e.target.closest('[data-filter]');
+      if (f) { E.setFilter(st, f.getAttribute('data-filter')); save(); render(); return; }
+      if (e.target.closest('#btn-refresh')) { if (E.refreshByPlayer(st)) { save(); render(); } return; }
       var b = e.target.closest('[data-buy]');
       if (b) { openBuy(b.getAttribute('data-buy')); return; }
       var m = e.target.closest('[data-manage]');
@@ -1154,7 +1210,7 @@
   }
 
   function start(data) {
-    st = (data && data.st && data.st.version === 6) ? data.st : (load() || E.newGame());
+    st = (data && data.st && data.st.version === 7) ? data.st : (load() || E.newGame());
     E.syncListings(st); // 이전 버전 저장본의 못 사는 매물 정리
     try { tab = TABS.indexOf(localStorage.getItem(TAB_KEY)) >= 0 ? localStorage.getItem(TAB_KEY) : 'home'; } catch (e) { tab = 'home'; }
     bind();
