@@ -639,40 +639,61 @@
 
   /* ---------- 월 진행 ---------- */
 
+  // 보증금이 들어오면 그 집 대출부터 갚는다. 대출을 다 갚고 남은 돈만 현금이 된다.
+  function depositIn(st, rep, p, amount, label) {
+    if (amount <= 0) return 0;
+    st.cash += amount;
+    flow(rep, label, amount);
+    var r = Math.min(p.loan, amount);
+    if (r > 0) {
+      p.loan -= r;
+      st.cash -= r;
+      flow(rep, '보증금으로 대출 상환', -r);
+    }
+    return r;
+  }
+  // 보증금을 돌려줄 때는 그 집 담보로 반환자금 대출을 먼저 받고(LTV·1건 한도 안에서), 모자라는 만큼만 현금으로 낸다.
+  // 호출 전에 p.lease를 반환 후 상태로 바꿔둔다 (남은 보증금이 대출 한도 계산에 들어간다).
+  function depositOut(st, rep, p, amount, label) {
+    if (amount <= 0) return 0;
+    st.cash -= amount;
+    flow(rep, label, -amount);
+    var b = Math.max(0, Math.min(amount, maxBorrow(st, p)));
+    if (b > 0) {
+      p.loan += b;
+      st.cash += b;
+      flow(rep, '보증금 반환자금 대출', b);
+    }
+    return b;
+  }
+
   function startLease(st, rep, p, terms, fromVacancy) {
     var fee = money((terms.deposit + terms.rent * 100) * CONFIG.leaseFee);
     p.lease = {
       kind: terms.kind, deposit: terms.deposit, rent: terms.rent,
       start: st.turn, end: st.turn + CONFIG.leaseMonths, renew: null
     };
-    st.cash += terms.deposit;
-    flow(rep, '보증금 받음 (나중에 돌려줄 돈)', terms.deposit);
     ledger(rep, '임대 중개수수료', -fee);
     st.cash -= fee;
     var text = propName(p) + (terms.kind === 'jeonse'
       ? ' 전세 계약: 보증금 ' + fmt(terms.deposit)
       : ' 월세 계약: 보증금 ' + fmt(terms.deposit) + ' / 월 ' + fmt(terms.rent));
-    if (fromVacancy && terms.kind === 'jeonse' && p.loan > 0) {
-      var r = Math.min(p.loan, terms.deposit, Math.max(0, st.cash));
-      if (r > 0) {
-        p.loan -= r;
-        st.cash -= r;
-        flow(rep, '보증금으로 대출 상환', -r);
-        text += ' · 보증금으로 대출 ' + fmt(r) + ' 상환';
-        if (terms.deposit > r) text += ' · 남은 ' + fmt(terms.deposit - r) + '은 현금으로 (만기에 돌려줄 돈)';
-      }
-    }
+    var r = depositIn(st, rep, p, terms.deposit, '보증금 받음 (나중에 돌려줄 돈)');
+    if (r > 0) text += ' · 보증금으로 대출 ' + fmt(r) + ' 상환';
+    if (terms.deposit > r) text += ' · ' + (r > 0 ? '남은 ' : '') + fmt(terms.deposit - r) + '은 현금으로 (대출이 없어서. 만기에 돌려줄 돈)';
     note(st, rep, text, 'good', true);
   }
 
   function endLeaseMoveOut(st, rep, p) {
     var back = Math.max(0, p.lease.deposit - p.unpaid);
-    st.cash -= back;
-    flow(rep, '보증금 반환', -back);
-    note(st, rep, propName(p) + ' 세입자 퇴거: 보증금 ' + fmt(back) + ' 반환' +
-      (p.unpaid ? ' (밀린 월세 ' + fmt(p.unpaid) + ' 공제)' : ''), back > 0 ? 'bad' : 'info', true);
     var kind = p.lease.kind;
+    var unpaid = p.unpaid;
     p.lease = null;
+    var b = depositOut(st, rep, p, back, '보증금 반환');
+    note(st, rep, propName(p) + ' 세입자 퇴거: 보증금 ' + fmt(back) + ' 반환' +
+      (unpaid ? ' (밀린 월세 ' + fmt(unpaid) + ' 공제)' : '') +
+      (b > 0 ? ' · 반환자금 대출 ' + fmt(b) + (back > b ? ' + 현금 ' + fmt(back - b) : '') : back > 0 ? ' · 대출 한도가 없어 전액 현금으로' : ''),
+      back > 0 ? 'bad' : 'info', true);
     p.nextLease = null;
     p.evicting = false;
     p.missed = 0;
@@ -710,11 +731,12 @@
           var mkt = money(jeonseValue(st, p));
           var nd = mkt >= L.deposit ? Math.min(money(L.deposit * 1.05), mkt) : mkt;
           var diff = nd - L.deposit;
-          st.cash += diff;
-          flow(rep, diff >= 0 ? '전세 보증금 증액분 받음' : '역전세 차액 반환', diff);
-          if (diff < 0) note(st, rep, propName(p) + ' 역전세: 전세 시세가 떨어져 재계약하며 보증금 차액 ' + fmt(-diff) + '을 돌려줬습니다.', 'bad', true);
-          else note(st, rep, propName(p) + ' 전세 재계약: 보증금 ' + fmt(L.deposit) + ' → ' + fmt(nd) + ' (5% 상한)', 'good');
+          var old = L.deposit;
           L.deposit = nd;
+          if (diff >= 0) depositIn(st, rep, p, diff, '전세 보증금 증액분 받음');
+          else depositOut(st, rep, p, -diff, '역전세 차액 반환');
+          if (diff < 0) note(st, rep, propName(p) + ' 역전세: 전세 시세가 떨어져 재계약하며 보증금 차액 ' + fmt(-diff) + '을 돌려줬습니다.', 'bad', true);
+          else note(st, rep, propName(p) + ' 전세 재계약: 보증금 ' + fmt(old) + ' → ' + fmt(nd) + ' (5% 상한)', 'good');
         } else {
           var terms = leaseTerms(st, p, 'wolse', 'market');
           var nr = terms.rent >= L.rent ? Math.min(money(L.rent * 1.05), terms.rent) : terms.rent;
@@ -731,9 +753,9 @@
         var n = p.nextLease;
         // 새 보증금을 받고, 기존 보증금에서 밀린 월세를 뺀 만큼 돌려준다
         var delta = n.deposit - Math.max(0, L.deposit - p.unpaid);
-        st.cash += delta;
-        flow(rep, '세입자 교체 보증금 차액', delta);
         p.lease = { kind: n.kind, deposit: n.deposit, rent: n.rent, start: t, end: t + CONFIG.leaseMonths, renew: null };
+        if (delta >= 0) depositIn(st, rep, p, delta, '세입자 교체 보증금 차액');
+        else depositOut(st, rep, p, -delta, '세입자 교체 보증금 차액');
         p.nextLease = null;
         p.unpaid = 0;
         p.defaultLeft = 0;
@@ -760,9 +782,9 @@
         // 중도 퇴거: 새 세입자 보증금으로 기존 보증금을 바로 돌려준다. 중개수수료는 나가는 세입자 부담
         var back = Math.max(0, p.lease.deposit - p.unpaid);
         var delta = terms.deposit - back;
-        st.cash += delta;
-        flow(rep, '세입자 교체 보증금 차액', delta);
         p.lease = { kind: terms.kind, deposit: terms.deposit, rent: terms.rent, start: st.turn, end: st.turn + CONFIG.leaseMonths, renew: null };
+        if (delta >= 0) depositIn(st, rep, p, delta, '세입자 교체 보증금 차액');
+        else depositOut(st, rep, p, -delta, '세입자 교체 보증금 차액');
         p.unpaid = 0;
         p.defaultLeft = 0;
         p.missed = 0;
@@ -1241,6 +1263,19 @@
     note(st, rep, ev.title + ': ' + propName(p), 'warn', true);
   }
 
+  // 같은 집에서 한 판에 한 번만 일어나는 사건 (한 번 고치거나 겪으면 다시 반복되지 않는다)
+  var ONCE_PER_HOUSE = { boiler: true, leak: true, wallpaper: true, fire: true, station: true };
+  // 같은 집에서 다시 일어나기까지 걸리는 개월 수
+  var COOLDOWN = { buyOffer: 24 };
+
+  function eventBlocked(st, p, key) {
+    if (!p.seen) p.seen = {};
+    if (ONCE_PER_HOUSE[key] && p.seen[key] != null) return true;
+    if (COOLDOWN[key] && p.seen[key] != null && st.turn - p.seen[key] < COOLDOWN[key]) return true;
+    if (key === 'rentDefault' && p.lease && p.lease.defaulted) return true; // 세입자 한 명당 한 번
+    return false;
+  }
+
   function rollEvents(st, rep) {
     var count = 0;
     var props = st.props.slice();
@@ -1249,7 +1284,10 @@
       if (st.props.indexOf(p) < 0) continue;
       for (var key in PROP_EVENTS) {
         var e = PROP_EVENTS[key];
+        if (eventBlocked(st, p, key)) continue;
         if (rand(st) >= e.chance(st, p)) continue;
+        p.seen[key] = st.turn;
+        if (key === 'rentDefault' && p.lease) p.lease.defaulted = true;
         count++;
         if (e.auto) e.auto(st, p, rep);
         else pushEvent(st, rep, key, p);
