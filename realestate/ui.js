@@ -8,6 +8,10 @@
   var SAVE_KEY = 'blind-seoul-v1';
   var BEST_KEY = 'blind-seoul-best';
   var HOWTO_KEY = 'blind-seoul-howto';
+  var TAB_KEY = 'blind-seoul-tab';
+  var TABS = ['home', 'market', 'listings', 'props', 'log'];
+  var tab = 'home';
+  var prevVals = {};
   var TONE_TAG = { good: '호재', bad: '악재', warn: '주의', info: '알림' };
   var LEASE_LABEL = { jeonse: '전세', wolse: '월세' };
 
@@ -42,7 +46,7 @@
   function load() {
     try {
       var s = JSON.parse(localStorage.getItem(SAVE_KEY));
-      return s && s.version === 5 && s.series ? s : null;
+      return s && s.version === 6 && s.series ? s : null;
     } catch (e) { return null; }
   }
   function loadBest() {
@@ -67,7 +71,11 @@
     $('s-net').innerHTML = esc(fmt(tot.net)) + '<small class="' + cls(d) + '">' + pct(d, 0) + '</small>';
     $('s-rate').innerHTML = m.rate.toFixed(2) + '%' +
       (Math.abs(m.rateChange) > 0.004 ? '<small class="' + cls(m.rateChange) + '">' + arrow(m.rateChange) + Math.abs(m.rateChange).toFixed(2) + '</small>' : '');
-    $('s-ltv').textContent = Math.round(m.ltv * 100) + '%';
+    bump('s-cash', st.cash);
+    bump('s-net', tot.net);
+    $('tab-listings').textContent = st.over ? '' : st.listings.length;
+    $('tab-props').textContent = st.props.length || '';
+    document.querySelector('#tabs .dot').hidden = !(st.cash < 0 || st.pending.length);
 
     var html = '';
     for (var y = 0; y < st.turns / 12; y++) {
@@ -143,6 +151,14 @@
     return { chips: chips, text: text };
   }
 
+  // 집 한 채의 내 몫·대출·보증금 비율 막대
+  function deedBar(p, v) {
+    var dep = E.deposit(p), eq = Math.max(0, v - p.loan - dep), sc = Math.max(v, p.loan + dep);
+    var parts = [[eq, '--mix-eq', '내 몫'], [p.loan, '--mix-loan', '대출'], [dep, '--mix-dep', '보증금']].filter(function (x) { return x[0] > 0; });
+    return '<div class="mixbar" role="img" aria-label="' + parts.map(function (x) { return x[2] + ' ' + Math.round(x[0] / sc * 100) + '%'; }).join(', ') + '">' +
+      parts.map(function (x) { return '<span style="width: ' + (x[0] / sc * 100).toFixed(2) + '%; background: var(' + x[1] + ')"></span>'; }).join('') + '</div>';
+  }
+
   function chipHtml(c) { return '<span class="chip ' + (c[1] || '') + '">' + esc(c[0]) + '</span>'; }
 
   function renderProps() {
@@ -161,7 +177,7 @@
       return '<article class="deed">' +
         '<div class="deed-head"><div class="deed-sub">' + esc(placeLabel(p)) + '</div>' +
         '<div class="deed-title">' + esc(E.TYPE_LABEL[p.type]) + ' · ' + esc(specLabel(p)) + '</div>' +
-        '<div class="chips">' + info.chips.map(chipHtml).join('') + '</div></div>' +
+        '<div class="chips">' + info.chips.map(chipHtml).join('') + '</div>' + deedBar(p, v) + '</div>' +
         '<div class="deed-rows">' +
         '<div class="lab">시세</div><div class="val">' + money(v) + '<span class="' + cls(gain) + '">' + pct(gain) + '</span></div>' +
         '<div class="lab">소유권</div><div class="val"><span>매수 ' + money(p.buyPrice) + '</span><span class="muted">' + held + '개월 보유</span></div>' +
@@ -195,7 +211,7 @@
     html += '</div><div class="rates">' +
       '<div class="cell"><div class="k">대출 금리</div><div class="v num">' + m.rate.toFixed(2) + '%</div></div>' +
       '<div class="cell"><div class="k">예금 금리</div><div class="v num">' + m.depositRate.toFixed(2) + '%</div></div>' +
-      '<div class="cell"><div class="k">LTV 한도</div><div class="v num">' + Math.round(m.ltv * 100) + '%</div></div></div>';
+      '<div class="cell"><div class="k">다음 매수 LTV</div><div class="v num">' + Math.round(m.ltv * 100) + '%</div></div></div>';
     if (m.mods.length) {
       html += '<div class="mods chips">' + m.mods.map(function (x) {
         return chipHtml([x.label + ' · ' + x.left + '개월', x.tone]);
@@ -268,17 +284,16 @@
 
   function renderBar() {
     var tot = E.totals(st);
-    var vac = st.props.reduce(function (a, p) { return a + (p.lease ? 0 : E.value(st, p) * E.CONFIG.vacancyCost); }, 0);
-    var flow = tot.rent - tot.interest - vac;
     var info;
     if (st.over) {
-      info = '<b>게임 종료</b> · 결과를 확인하세요';
+      info = '<div class="ab-flow"><span class="k">게임 종료</span><span class="v">결과를 확인하세요</span></div>';
     } else if (st.cash < 0) {
-      info = '<b style="color: var(--danger)">현금 부족 · 연체 ' + st.arrears + '개월째</b><br>' +
-        (E.CONFIG.arrearsLimit - st.arrears) + '개월 안에 메우지 못하면 경매. 추가 대출·급매로 막으세요.';
+      info = '<div class="ab-flow"><span class="k" style="color: var(--danger)">현금 부족 · 연체 ' + st.arrears + '개월째</span>' +
+        '<span class="v num down">' + esc(fmt(st.cash)) + '</span><span class="s">' + (E.CONFIG.arrearsLimit - st.arrears) + '개월 안에 못 메우면 경매</span></div>';
     } else {
-      info = '<b>' + (st.turn + 1) + '개월차로</b> · 매달 현금흐름 <span class="num ' + cls(flow) + '">' + esc(fmt(flow, { plus: true })) + '</span>' +
-        '<br><span class="muted">월세 ' + esc(fmt(tot.rent)) + ' · 이자 ' + esc(fmt(tot.interest)) + (vac ? ' · 공실비 ' + esc(fmt(vac)) : '') + '</span>';
+      info = '<div class="ab-flow"><span class="k">' + (st.turn + 1) + '개월차 예상 현금흐름</span>' +
+        '<span class="v num ' + cls(tot.flow) + '">' + esc(fmt(tot.flow, { plus: true })) + '<small class="muted"> /월</small></span>' +
+        '<span class="s">월세 ' + esc(fmt(tot.rent)) + ' · 이자 ' + esc(fmt(tot.interest)) + (tot.vacancy ? ' · 공실비 ' + esc(fmt(tot.vacancy)) : '') + '</span></div>';
     }
     $('ab-info').innerHTML = info;
     $('btn-next').textContent = st.over ? '결과 보기' : st.pending.length ? '사건 처리' : '다음 달';
@@ -286,7 +301,9 @@
   }
 
   function render() {
+    applyTabs();
     renderTop();
+    renderDash();
     renderReport();
     renderProps();
     renderMarket();
@@ -330,7 +347,8 @@
     rep.classList.remove('flash');
     void rep.offsetWidth;
     rep.classList.add('flash');
-    if (window.innerWidth <= 880) document.querySelector('.market-panel').scrollIntoView({ block: 'start', behavior: 'smooth' });
+    if (isMobile() && tab !== 'home') setTab('home');
+    else if (isMobile()) window.scrollTo({ top: 0, behavior: 'smooth' });
     afterStep();
   }
 
@@ -434,7 +452,7 @@
       dlgBody.innerHTML = '<form class="dlg" id="buy-form">' +
         '<div><div class="eyebrow">매수 검토 · ' + esc(placeLabel(l)) + '</div><h3>' + esc(E.TYPE_LABEL[l.type]) + ' ' + money(l.price) + '</h3>' +
         '<div class="sub">' + esc(specLabel(l)) + (l.tag ? ' · 시세 ' + esc(fmt(l.fair)) : '') + '</div></div>' + note +
-        '<div class="dlg-section"><div class="eyebrow">대출 (LTV 한도 ' + Math.round(E.ltv(st) * 100) + '% · 금리 ' + E.gameRate(st, st.turn).toFixed(2) + '%)</div>' +
+        '<div class="dlg-section"><div class="eyebrow">대출 · ' + (st.props.length + 1) + '번째 집 LTV ' + Math.round(E.ltv(st) * 100) + '% · 1건 최대 ' + esc(fmt(E.CONFIG.loanCap)) + ' · 금리 ' + E.gameRate(st, st.turn).toFixed(2) + '%</div>' +
         '<input type="range" id="buy-loan" min="0" max="' + q.loanMax + '" step="1000000" value="' + q.loan + '" aria-label="대출 금액">' +
         '<div class="loan-out" id="buy-loan-out"></div></div>' +
         '<div class="dlg-section"><div class="eyebrow">임대 계획</div>' +
@@ -531,7 +549,7 @@
           : '<div class="sub">' + (p.loan ? '상환할 현금이 없습니다.' : '대출이 없습니다.') + '</div>') +
         (maxBorrow ? '<input type="range" id="m-borrow" min="0" max="' + maxBorrow + '" step="1000000" value="' + form.borrow + '" aria-label="추가 대출 금액">' +
           '<div class="loan-out"><span>추가 대출 <span id="m-borrow-out">' + money(form.borrow) + '</span> <span class="muted">한도 ' + esc(fmt(maxBorrow)) + '</span></span><button class="btn small" type="button" id="m-borrow-btn">대출받기</button></div>'
-          : '<div class="sub">추가 대출 한도가 없습니다. (시세 × LTV − 기존 대출 − 보증금)</div>') +
+          : '<div class="sub">추가 대출 한도가 없습니다. (시세 × LTV ' + Math.round(E.ltvFor(st, st.props.length) * 100) + '% − 기존 대출 − 보증금, 1건 최대 ' + esc(fmt(E.CONFIG.loanCap)) + ')</div>') +
         '</div>' +
 
         '<div class="dlg-actions"><button class="btn" type="button" id="m-close">닫기</button></div>' +
@@ -612,10 +630,15 @@
         '<div class="dlg-section"><div class="eyebrow">내 순자산 추이</div><div class="chart" id="net-chart"></div></div>' +
         '<table class="bench"><tbody>' + rows + '</tbody></table>' +
         (best ? '<div class="sub">최고 기록: ' + esc(fmt(best.net)) + ' (' + Number(best.mult).toFixed(2) + '배 · ' + esc(best.grade) + ' · ' + esc(best.from) + '~)</div>' : '') +
+        '<div class="dlg-section"><div class="eyebrow">결과 공유</div><div class="share-row">' +
+        '<button class="btn" type="button" id="r-share">결과 공유하기</button><button class="btn" type="button" id="r-image">이미지로 저장</button></div>' +
+        '<div class="share-msg" id="r-msg" aria-live="polite"></div><textarea id="r-text" class="share-text" readonly hidden></textarea></div>' +
         '<div class="dlg-actions"><button class="btn" type="button" id="r-close">판 다시 보기</button><button class="btn primary" type="button" id="r-new">새 게임</button></div>' +
         '</div>';
       $('r-close').addEventListener('click', closeDialog);
       $('r-new').addEventListener('click', function () { newGame(); });
+      $('r-share').addEventListener('click', function () { shareResult(r); });
+      $('r-image').addEventListener('click', function () { saveResultImage(r); });
       requestAnimationFrame(drawResultCharts);
     }
     function drawResultCharts() {
@@ -701,6 +724,7 @@
     var n = cfg.series[0].values.length;
     var all = [];
     cfg.series.forEach(function (s) { all = all.concat(s.values); });
+    if (cfg.ref) all.push(cfg.ref.value);
     var ticks = niceTicks(Math.min.apply(null, all), Math.max.apply(null, all), 4);
     var lo = ticks[0], hi = ticks[ticks.length - 1];
     var tickStep = ticks.length > 1 ? ticks[1] - ticks[0] : 1;
@@ -733,6 +757,11 @@
       lastRight = left + w;
       o.push('<text class="axis-text" x="' + x(t.i).toFixed(1) + '" y="' + (H - 6) + '" text-anchor="' + anchor + '">' + esc(t.label) + '</text>');
     });
+    if (cfg.ref) {
+      var ry = y(cfg.ref.value).toFixed(1);
+      o.push('<line class="ref-line" x1="' + pad.l + '" x2="' + (W - pad.r) + '" y1="' + ry + '" y2="' + ry + '"></line>');
+      o.push('<text class="ref-text" x="' + (pad.l + 4) + '" y="' + (Number(ry) - 4) + '">' + esc(cfg.ref.label) + '</text>');
+    }
     if (cfg.mark != null && cfg.mark < n) {
       o.push('<line class="start-line" x1="' + x(cfg.mark).toFixed(1) + '" x2="' + x(cfg.mark).toFixed(1) + '" y1="' + pad.t + '" y2="' + (pad.t + ih) + '"></line>');
     }
@@ -804,12 +833,313 @@
     svg.addEventListener('pointerleave', hide);
   }
 
+  /* ---------- 숫자 강조 ---------- */
+
+  function bump(id, val) {
+    var el = $(id);
+    var p = prevVals[id];
+    prevVals[id] = val;
+    if (!el || p == null || Math.abs(p - val) < 1e4) return;
+    el.classList.remove('bump-up', 'bump-down');
+    void el.offsetWidth;
+    el.classList.add(val > p ? 'bump-up' : 'bump-down');
+  }
+
+  /* ---------- 탭 (모바일) ---------- */
+
+  function isMobile() { return window.matchMedia('(max-width: 880px)').matches; }
+
+  function applyTabs() {
+    var m = isMobile();
+    document.body.setAttribute('data-tab', tab);
+    document.querySelectorAll('main [data-tab]').forEach(function (el) {
+      el.hidden = m && el.getAttribute('data-tab') !== tab;
+    });
+    document.querySelectorAll('#tabs [data-go]').forEach(function (b) {
+      b.setAttribute('aria-current', b.getAttribute('data-go') === tab ? 'page' : 'false');
+    });
+  }
+
+  function setTab(t) {
+    tab = t;
+    try { localStorage.setItem(TAB_KEY, t); } catch (e) { /* 무시 */ }
+    render();
+    window.scrollTo({ top: 0 });
+  }
+
+  /* ---------- 게임 방법 ---------- */
+
+  function openHowto() {
+    openDialog(function () {
+      dlgBody.innerHTML = $('howto-tpl').innerHTML;
+      $('howto-close').addEventListener('click', function () {
+        try { localStorage.setItem(HOWTO_KEY, 'seen'); } catch (e) { /* 무시 */ }
+        closeDialog();
+        afterStep();
+      });
+    });
+  }
+
+  /* ---------- 현황판 ---------- */
+
+  function renderDash() {
+    var tot = E.totals(st);
+    var start = E.CONFIG.startCash;
+    var hist = st.hist;
+    var prev = hist.length > 1 ? hist[hist.length - 2].net : start;
+    var d = tot.net / start - 1;
+    var dm = tot.net - prev;
+    var g = E.grade(tot.net / start, false);
+
+    // 1. 순자산
+    $('card-net').innerHTML =
+      '<div class="card-head"><h2>순자산</h2><span class="chip">지금 등급 ' + esc(g) + '</span></div>' +
+      '<div class="big num" id="d-net">' + esc(fmt(tot.net)) + '</div>' +
+      '<div class="kpi-sub"><span>시작 대비 <span class="num ' + cls(d) + '">' + pct(d) + '</span></span>' +
+      '<span>지난달 대비 <span class="num ' + cls(dm) + '">' + esc(fmt(dm, { plus: true })) + '</span></span></div>' +
+      '<div class="chart small" id="net-mini"></div>';
+    var ticks = [];
+    for (var t = 0; t < hist.length; t += 12) ticks.push({ i: t, label: t === 0 ? '시작' : t / 12 + '년' });
+    lineChart($('net-mini'), {
+      series: [{ label: '순자산', color: '--accent', values: hist.map(function (h) { return h.net; }) }],
+      area: true, height: isMobile() ? 140 : 190, ref: { value: start, label: '시작 ' + fmt(start) },
+      xTicks: ticks, yFmt: short, tipFmt: function (v) { return fmt(v); },
+      xFmt: function (i) { return hist[i].t === 0 ? '시작' : hist[i].t + '개월차'; },
+      label: '순자산 추이'
+    });
+    bump('d-net', tot.net);
+
+    // 2. 자산 구성
+    var mix;
+    if (!st.props.length) {
+      mix = '<div class="card-head"><h2>자산 구성</h2><span class="aside muted">집 0채</span></div>' +
+        '<div class="big num">' + esc(fmt(st.cash)) + '<small>현금</small></div>' +
+        '<div class="kpi-sub">아직 전부 현금입니다. 매물에서 집을 고르면 내 돈·대출·보증금 비율이 여기에 나옵니다.</div>' +
+        '<div class="mixbar"><span style="width: 100%; background: var(--mix-eq)"></span></div>';
+    } else {
+      var v = tot.value, eq = v - tot.loan - tot.deposit;
+      var scale = Math.max(v, tot.loan + tot.deposit);
+      var parts = [
+        { k: '내 돈', c: '--mix-eq', a: Math.max(0, eq) },
+        { k: '은행 대출', c: '--mix-loan', a: tot.loan },
+        { k: '세입자 보증금', c: '--mix-dep', a: tot.deposit }
+      ];
+      var ratio = tot.debtRatio;
+      var tone = ratio < 0.6 ? 'good' : ratio < 0.8 ? 'warn' : 'bad';
+      var toneLabel = { good: '안정', warn: '주의', bad: '위험' }[tone];
+      mix = '<div class="card-head"><h2>자산 구성</h2><span class="aside muted">집 ' + st.props.length + '채</span></div>' +
+        '<div class="big num">' + esc(fmt(v)) + '<small>집값 합계</small></div>' +
+        '<div class="mixbar" role="img" aria-label="집값 중 내 돈 ' + Math.round(Math.max(0, eq) / scale * 100) + '%, 대출 ' + Math.round(tot.loan / scale * 100) + '%, 보증금 ' + Math.round(tot.deposit / scale * 100) + '%">' +
+        parts.filter(function (x) { return x.a > 0; }).map(function (x) {
+          return '<span style="width: ' + (x.a / scale * 100).toFixed(2) + '%; background: var(' + x.c + ')"></span>';
+        }).join('') + '</div>' +
+        '<div class="legend-rows">' + parts.map(function (x) {
+          return '<span class="sw" style="background: var(' + x.c + ')"></span><span>' + x.k + '</span>' +
+            '<span class="amt num">' + esc(fmt(x.a)) + '</span><span class="pc num">' + Math.round(x.a / scale * 100) + '%</span>';
+        }).join('') + '</div>' +
+        (eq < 0 ? '<div class="runway bad">집값보다 빚이 ' + esc(fmt(-eq)) + ' 많습니다 (깡통 상태)</div>' : '') +
+        '<div class="mini-stats">' +
+        '<div><div class="k">현금</div><div class="v ' + (st.cash < 0 ? 'down' : '') + '">' + esc(fmt(st.cash)) + '</div></div>' +
+        '<div title="대출 + 보증금 ÷ 집값"><div class="k">빚 비율 <b class="chip ' + tone + '" style="padding: 2px 6px">' + toneLabel + '</b></div>' +
+        '<div class="v">' + Math.round(ratio * 100) + '%</div><div class="gauge ' + tone + '"><i style="width: ' + Math.min(100, ratio * 100).toFixed(1) + '%"></i></div></div>' +
+        '</div>';
+    }
+    $('card-mix').innerHTML = mix + '<div class="kpi-sub muted">다음 매수 LTV ' + Math.round(E.ltv(st) * 100) + '% · 1건 최대 ' + esc(fmt(E.CONFIG.loanCap)) + '</div>';
+
+    // 3. 월 현금흐름
+    var out = tot.interest + tot.vacancy;
+    var sc = Math.max(tot.rent, out, 1);
+    var runway, rtone;
+    if (st.cash < 0) {
+      rtone = 'bad';
+      runway = '연체 ' + st.arrears + '개월째 · ' + (E.CONFIG.arrearsLimit - st.arrears) + '개월 안에 현금을 메우지 못하면 경매';
+    } else if (tot.flow < -1e4) {
+      var months = Math.floor(st.cash / -tot.flow);
+      rtone = months < 6 ? 'bad' : months < 18 ? 'warn' : '';
+      runway = '지금 현금으로 약 ' + (months > 240 ? '20년 이상' : months + '개월') + ' 버틸 수 있습니다';
+    } else if (st.props.length) {
+      rtone = 'good';
+      runway = '매달 흑자입니다';
+    } else {
+      rtone = '';
+      runway = '아직 들어오고 나가는 돈이 없습니다';
+    }
+    var nextTax = 12 - (st.turn % 12);
+    $('card-flow').innerHTML =
+      '<div class="card-head"><h2>월 현금흐름</h2><span class="aside muted">다음 달 예상</span></div>' +
+      '<div class="big num ' + cls(tot.flow) + '" id="d-flow">' + esc(fmt(tot.flow, { plus: true })) + '<small>/월</small></div>' +
+      '<div class="flow-rows">' +
+      '<div class="flow-row"><span class="lab">들어오는 돈</span><div class="track">' +
+      (tot.rent ? '<span style="width: ' + (tot.rent / sc * 100).toFixed(2) + '%; background: var(--mix-eq)"></span>' : '') + '</div>' +
+      '<div class="detail"><span><i style="background: var(--mix-eq)"></i>월세 ' + money(tot.rent) + '</span>' +
+      (tot.rentLost ? '<span class="down">미납 ' + esc(fmt(tot.rentLost)) + '</span>' : '') + '</div></div>' +
+      '<div class="flow-row"><span class="lab">나가는 돈</span><div class="track">' +
+      (tot.interest ? '<span style="width: ' + (tot.interest / sc * 100).toFixed(2) + '%; background: var(--mix-loan)"></span>' : '') +
+      (tot.vacancy ? '<span style="width: ' + (tot.vacancy / sc * 100).toFixed(2) + '%; background: var(--ink-3)"></span>' : '') + '</div>' +
+      '<div class="detail"><span><i style="background: var(--mix-loan)"></i>이자 ' + money(tot.interest) + ' (' + E.gameRate(st, st.turn).toFixed(2) + '%)</span>' +
+      (tot.vacancy ? '<span><i style="background: var(--ink-3)"></i>공실비 ' + money(tot.vacancy) + ' · 공실 ' + tot.vacant + '채</span>' : '') + '</div></div>' +
+      '</div>' +
+      '<div class="runway ' + rtone + '">' + esc(runway) + '</div>' +
+      (st.props.length ? '<div class="kpi-sub muted">보유세 연 ' + esc(fmt(tot.holdingYear)) + ' · ' + nextTax + '개월 뒤 납부</div>' : '') +
+      '<div class="bars-title">최근 24개월 월별 손익 (이자·월세·세금·수리비 등)</div><div class="chart" id="pl-bars"></div>';
+    var recent = hist.slice(-24);
+    barChart($('pl-bars'), {
+      values: recent.map(function (h) { return h.pl; }),
+      labels: recent.map(function (h) { return h.t === 0 ? '시작' : h.t + '개월차'; }),
+      height: 64
+    });
+    bump('d-flow', tot.flow);
+
+    // 경고 띠
+    var al = $('alert');
+    if (!st.over && st.cash < 0) {
+      al.className = 'alert';
+      al.innerHTML = '<div><b>현금 ' + esc(fmt(st.cash)) + ' · 연체 ' + st.arrears + '개월째</b>' +
+        (E.CONFIG.arrearsLimit - st.arrears) + '개월 안에 메우지 못하면 빚이 가장 많은 집이 시세 70%에 경매로 넘어갑니다. 추가 대출을 받거나 급매로 내놓으세요.</div>';
+      al.hidden = false;
+    } else if (!st.over && st.props.length && tot.flow < -1e4 && st.cash / -tot.flow < 6) {
+      al.className = 'alert warn';
+      al.innerHTML = '<div><b>현금이 ' + Math.floor(st.cash / -tot.flow) + '개월치밖에 안 남았습니다</b>매달 ' + esc(fmt(-tot.flow)) + '씩 나가고 있습니다. 세입자를 구하거나 대출을 줄이세요.</div>';
+      al.hidden = false;
+    } else {
+      al.hidden = true;
+    }
+  }
+
+  /* ---------- 막대 그래프 (월별 손익) ---------- */
+
+  function barChart(el, cfg) {
+    if (!el) return;
+    var W = Math.max(240, Math.round(el.clientWidth || 300));
+    var H = cfg.height || 64;
+    var vals = cfg.values;
+    var n = Math.max(vals.length, 1);
+    var lo = Math.min(0, Math.min.apply(null, vals)), hi = Math.max(0, Math.max.apply(null, vals));
+    if (hi - lo < 1) hi = lo + 1;
+    var pad = { t: 4, b: 4 };
+    var ih = H - pad.t - pad.b;
+    function y(v) { return pad.t + (hi - v) / (hi - lo) * ih; }
+    var slot = W / n, bw = Math.max(2, slot - 2);
+    var o = ['<svg viewBox="0 0 ' + W + ' ' + H + '" width="' + W + '" height="' + H + '" role="img" aria-label="최근 월별 손익">'];
+    o.push('<line class="grid-line" x1="0" x2="' + W + '" y1="' + y(0).toFixed(1) + '" y2="' + y(0).toFixed(1) + '"></line>');
+    vals.forEach(function (v, i) {
+      var y0 = y(0), y1 = y(v);
+      var top = Math.min(y0, y1), h = Math.max(1, Math.abs(y1 - y0));
+      o.push('<rect x="' + (i * slot + 1).toFixed(1) + '" y="' + top.toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + h.toFixed(1) + '" rx="1.5" style="fill: var(' + (v >= 0 ? '--up' : '--down') + ')"></rect>');
+    });
+    o.push('<rect class="hit" x="0" y="0" width="' + W + '" height="' + H + '" fill="transparent"></rect></svg><div class="chart-tip" hidden></div>');
+    el.innerHTML = o.join('');
+    var svg = el.querySelector('svg'), tip = el.querySelector('.chart-tip');
+    function show(ev) {
+      var rect = svg.getBoundingClientRect();
+      var i = Math.max(0, Math.min(vals.length - 1, Math.floor((ev.clientX - rect.left) / rect.width * n)));
+      if (!vals.length) return;
+      tip.innerHTML = '<div><b>' + esc(cfg.labels[i]) + '</b></div><div class="num ' + cls(vals[i]) + '">' + esc(fmt(vals[i], { plus: true })) + '</div>';
+      tip.hidden = false;
+      var left = (i + 0.5) * rect.width / n + 10;
+      if (left + tip.offsetWidth > rect.width) left = (i + 0.5) * rect.width / n - tip.offsetWidth - 10;
+      tip.style.left = Math.max(0, left) + 'px';
+      tip.style.top = '0px';
+    }
+    svg.addEventListener('pointermove', show);
+    svg.addEventListener('pointerdown', show);
+    svg.addEventListener('pointerleave', function () { tip.hidden = true; });
+  }
+
+  /* ---------- 결과 공유 ---------- */
+
+  function pageUrl() { return location.href.split('#')[0].split('?')[0]; }
+
+  function shareText(r) {
+    return '블라인드 서울 결과: ' + fmt(E.CONFIG.startCash) + ' → ' + fmt(r.net) + ' (' + r.mult.toFixed(2) + '배, ' + r.grade + (r.grade.length === 1 ? '등급' : '') + ')\n' +
+      '이번 판의 서울: ' + r.from.y + '년 ' + r.from.m + '월 ~ ' + r.to.y + '년 ' + r.to.m + '월 · ' + r.eras.join(', ') + '\n' + pageUrl();
+  }
+
+  function shareResult(r) {
+    var text = shareText(r);
+    var msg = $('r-msg');
+    if (navigator.share) {
+      navigator.share({ title: '블라인드 서울', text: text }).catch(function () { /* 사용자가 취소 */ });
+      return;
+    }
+    function fallback() {
+      var ta = $('r-text');
+      ta.value = text;
+      ta.hidden = false;
+      ta.select();
+      msg.textContent = '아래 글을 복사해서 공유하세요.';
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { msg.textContent = '결과를 복사했습니다. 붙여넣어 공유하세요.'; }, fallback);
+    } else {
+      fallback();
+    }
+  }
+
+  function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+  function saveResultImage(r) {
+    var W = 1080, H = 1350, c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    var g = c.getContext('2d');
+    var ink = cssVar('--ink'), ink3 = cssVar('--ink-3'), paper = cssVar('--paper'), sheet = cssVar('--sheet'), accent = cssVar('--accent'), stamp = cssVar('--stamp'), rule = cssVar('--rule');
+    var disp = "'Black Han Sans', 'IBM Plex Sans KR', sans-serif", body = "'IBM Plex Sans KR', sans-serif", mono = "'IBM Plex Mono', 'IBM Plex Sans KR', monospace";
+    g.fillStyle = paper; g.fillRect(0, 0, W, H);
+    g.fillStyle = sheet; g.fillRect(60, 60, W - 120, H - 120);
+    g.strokeStyle = rule; g.lineWidth = 2; g.strokeRect(60, 60, W - 120, H - 120);
+    g.fillStyle = ink; g.font = '64px ' + disp; g.fillText('블라인드 서울', 120, 190);
+    g.fillStyle = ink3; g.font = '32px ' + body; g.fillText('10억으로 서울 10년 버티기', 120, 240);
+    // 등급 도장
+    g.save(); g.translate(820, 210); g.rotate(-0.1);
+    g.strokeStyle = stamp; g.lineWidth = 8; g.strokeRect(-90, -90, 180, 180);
+    g.fillStyle = stamp; g.font = (r.grade.length > 1 ? '64px ' : '120px ') + disp; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(r.grade, 0, 8); g.restore();
+    g.fillStyle = ink3; g.font = '34px ' + body; g.fillText(st.bankrupt ? '파산' : st.turns + '개월 후 최종 순자산', 120, 380);
+    g.fillStyle = ink; g.font = '700 104px ' + mono; g.fillText(fmt(r.net), 120, 500);
+    g.fillStyle = accent; g.font = '600 40px ' + body; g.fillText('종잣돈 ' + fmt(E.CONFIG.startCash) + '의 ' + r.mult.toFixed(2) + '배', 120, 570);
+    g.fillStyle = ink3; g.font = '32px ' + body; g.fillText('이번 판의 서울은', 120, 670);
+    g.fillStyle = ink; g.font = '56px ' + disp; g.fillText(r.from.y + '년 ' + r.from.m + '월 ~ ' + r.to.y + '년 ' + r.to.m + '월', 120, 745);
+    g.fillStyle = ink3; g.font = '30px ' + body; g.fillText(r.eras.join(' · ').slice(0, 40), 120, 800);
+    // 순자산 선
+    var vals = st.hist.map(function (h) { return h.net; });
+    var lo = Math.min.apply(null, vals.concat([E.CONFIG.startCash])), hi = Math.max.apply(null, vals.concat([E.CONFIG.startCash]));
+    if (hi - lo < 1) hi = lo + 1;
+    var x0 = 120, x1 = W - 120, y0 = 1180, y1 = 880;
+    function px(i) { return x0 + (vals.length <= 1 ? 0 : i * (x1 - x0) / (vals.length - 1)); }
+    function py(v) { return y0 - (v - lo) / (hi - lo) * (y0 - y1); }
+    g.strokeStyle = rule; g.setLineDash([10, 8]); g.lineWidth = 2;
+    g.beginPath(); g.moveTo(x0, py(E.CONFIG.startCash)); g.lineTo(x1, py(E.CONFIG.startCash)); g.stroke(); g.setLineDash([]);
+    g.strokeStyle = accent; g.lineWidth = 6; g.lineJoin = 'round'; g.beginPath();
+    vals.forEach(function (v, i) { if (i) g.lineTo(px(i), py(v)); else g.moveTo(px(i), py(v)); });
+    g.stroke();
+    g.fillStyle = ink3; g.font = '26px ' + body; g.fillText(pageUrl().replace(/^https?:\/\//, ''), 120, H - 100);
+    c.toBlob(function (blob) {
+      if (!blob) return;
+      var file = new File([blob], 'blind-seoul.png', { type: 'image/png' });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        navigator.share({ files: [file], title: '블라인드 서울' }).catch(function () { /* 취소 */ });
+        return;
+      }
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'blind-seoul.png';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+      $('r-msg').textContent = '이미지를 저장했습니다.';
+    }, 'image/png');
+  }
+
   /* ---------- 시작 ---------- */
 
   function bind() {
     $('btn-next').addEventListener('click', onNext);
     $('btn-auto').addEventListener('click', function () { if (!st.over && !st.pending.length) step(12); });
     $('btn-new').addEventListener('click', confirmNew);
+    $('btn-howto').addEventListener('click', openHowto);
+    document.querySelectorAll('#tabs [data-go]').forEach(function (b) {
+      b.addEventListener('click', function () { setTab(b.getAttribute('data-go')); });
+    });
     document.addEventListener('click', function (e) {
       var b = e.target.closest('[data-buy]');
       if (b) { openBuy(b.getAttribute('data-buy')); return; }
@@ -819,22 +1149,20 @@
     var timer = null;
     window.addEventListener('resize', function () {
       clearTimeout(timer);
-      timer = setTimeout(function () { drawMarketChart(); }, 120);
+      timer = setTimeout(render, 150);
     });
   }
 
   function start(data) {
-    st = (data && data.st && data.st.version === 5) ? data.st : (load() || E.newGame());
+    st = (data && data.st && data.st.version === 6) ? data.st : (load() || E.newGame());
     E.syncListings(st); // 이전 버전 저장본의 못 사는 매물 정리
-    var howtoPref = null;
-    try { howtoPref = localStorage.getItem(HOWTO_KEY); } catch (e) { /* 저장 불가 환경 */ }
-    $('howto').open = howtoPref ? howtoPref === 'open' : st.turn === 0;
-    $('howto').addEventListener('toggle', function () {
-      try { localStorage.setItem(HOWTO_KEY, $('howto').open ? 'open' : 'closed'); } catch (e) { /* 무시 */ }
-    });
+    try { tab = TABS.indexOf(localStorage.getItem(TAB_KEY)) >= 0 ? localStorage.getItem(TAB_KEY) : 'home'; } catch (e) { tab = 'home'; }
     bind();
     render();
-    afterStep();
+    var seen = null;
+    try { seen = localStorage.getItem(HOWTO_KEY); } catch (e) { /* 저장 불가 환경 */ }
+    if (!seen && st.turn === 0) openHowto();
+    else afterStep();
   }
 
   var hot = window.claude && window.claude.hot;

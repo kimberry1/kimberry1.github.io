@@ -15,7 +15,8 @@
     history: 3,            // 시작 전 추세 계산용 개월 수
     baseRate: 4.0,         // 시작 금리 고정 (실제 금리는 변동 폭만 반영)
     minRate: 1.5,
-    ltv: 0.6,
+    ltvByHouse: [0.6, 0.4, 0.3], // 몇 번째 집이냐에 따른 LTV: 무주택 60%, 1주택자 40%, 2주택 이상 30%
+    loanCap: 6e8,                // 주택담보대출 1건당 최대 한도
     leaseMonths: 24,
     noticeMonths: 2,       // 만기 몇 달 전에 재계약 여부를 통보받는지
     noise: 0.0025,         // 판마다 다른 월간 시세 잡음 (표준편차)
@@ -181,11 +182,14 @@
       return acc * m.mult;
     }, 1);
   }
-  function ltv(st) {
-    var v = CONFIG.ltv;
-    activeMods(st).forEach(function (m) { if (m.name === 'ltv') v = m.value; });
-    return v;
+  // nth번째 집을 살 때(또는 nth채를 가진 상태에서 추가 대출할 때)의 LTV. 규제·완화 사건은 배수로 작용한다.
+  function ltvFor(st, nth) {
+    var base = CONFIG.ltvByHouse[Math.min(Math.max(nth, 1), CONFIG.ltvByHouse.length) - 1];
+    var mult = activeMods(st).reduce(function (a, m) { return m.name === 'ltv' ? a * m.mult : a; }, 1);
+    return Math.min(0.8, Math.round(base * mult * 100) / 100);
   }
+  function ltv(st) { return ltvFor(st, st.props.length + 1); } // 다음에 살 집 기준
+  function loanLimit(st, price, nth) { return Math.min(CONFIG.loanCap, down(price * ltvFor(st, nth), 1e6)); }
 
   function value(st, p, t) {
     t = t == null ? st.turn : t;
@@ -203,16 +207,23 @@
     return st.cash + st.props.reduce(function (a, p) { return a + equity(st, p); }, 0);
   }
   function totals(st) {
-    var t = { value: 0, loan: 0, deposit: 0, rent: 0, interest: 0 };
+    var t = { value: 0, loan: 0, deposit: 0, rent: 0, rentLost: 0, interest: 0, vacancy: 0, vacant: 0 };
     var rate = gameRate(st, st.turn);
     st.props.forEach(function (p) {
-      t.value += value(st, p);
+      var v = value(st, p);
+      t.value += v;
       t.loan += p.loan;
       t.deposit += deposit(p);
-      if (p.lease && p.lease.kind === 'wolse') t.rent += p.lease.rent;
+      if (p.lease && p.lease.kind === 'wolse') {
+        if (p.defaultLeft > 0) t.rentLost += p.lease.rent; else t.rent += p.lease.rent;
+      }
+      if (!p.lease) { t.vacancy += v * CONFIG.vacancyCost; t.vacant += 1; }
     });
     t.interest = t.loan * rate / 100 / 12;
+    t.flow = t.rent - t.interest - t.vacancy;              // 다음 달 예상 현금흐름 (예금 이자 제외)
     t.net = st.cash + t.value - t.loan - t.deposit;
+    t.holdingYear = st.props.length ? holdingTax(st) : 0;
+    t.debtRatio = t.value ? (t.loan + t.deposit) / t.value : 0;
     return t;
   }
 
@@ -367,7 +378,7 @@
 
   // 대출을 한도까지 받았을 때 매수에 필요한 최소 현금
   function minCash(st, price) {
-    return price + money(price * acqTaxRate(st.props.length + 1, price)) + money(price * CONFIG.buyFee) - down(price * ltv(st), 1e6);
+    return price + money(price * acqTaxRate(st.props.length + 1, price)) + money(price * CONFIG.buyFee) - loanLimit(st, price, st.props.length + 1);
   }
   function affordable(st, l) { return minCash(st, l.price) <= st.cash; }
 
@@ -457,7 +468,7 @@
   function newGame(seed) {
     if (seed == null) seed = (Date.now() ^ Math.floor(Math.random() * 4294967296)) | 0;
     var st = {
-      version: 5,
+      version: 6,
       seed: seed, rng: seed,
       turn: 0, turns: CONFIG.turns,
       cash: CONFIG.startCash,
@@ -471,7 +482,7 @@
     st.series = buildSeries(st);
     refreshListings(st);
     st.report = { t: 0, ledger: [], items: [{ text: '종잣돈 ' + fmt(CONFIG.startCash) + '으로 시작합니다. 몇 년도인지는 게임이 끝나야 공개됩니다.', tone: 'info' }] };
-    st.hist.push({ t: 0, net: netWorth(st), cash: st.cash });
+    recordHist(st);
     return st;
   }
 
@@ -531,7 +542,7 @@
     var taxRate = acqTaxRate(count, l.price);
     var tax = money(l.price * taxRate);
     var fee = money(l.price * CONFIG.buyFee);
-    var loanMax = down(l.price * ltv(st), 1e6);
+    var loanMax = loanLimit(st, l.price, count);
     loan = clamp(down(loan || 0, 1e6), 0, loanMax);
     var need = l.price + tax + fee - loan;
     var q = {
@@ -576,6 +587,7 @@
     }
     if (opts.leaseKind) p.seeking = { kind: opts.leaseKind, ask: opts.ask || 'market' };
     syncListings(st);
+    recordHist(st);
     return { ok: true, prop: p };
   }
 
@@ -593,7 +605,8 @@
   }
 
   function maxBorrow(st, p) {
-    return down(value(st, p) * ltv(st) - p.loan - deposit(p), 1e6);
+    var byLtv = value(st, p) * ltvFor(st, st.props.length) - p.loan - deposit(p);
+    return down(Math.min(byLtv, CONFIG.loanCap - p.loan), 1e6);
   }
 
   function borrow(st, propId, amount) {
@@ -606,6 +619,7 @@
     flow(st.report, '추가 대출', a);
     note(st, st.report, propName(p) + ' 담보 추가 대출 ' + fmt(a), 'info');
     syncListings(st);
+    recordHist(st);
     return { ok: true, amount: a };
   }
 
@@ -619,6 +633,7 @@
     flow(st.report, '대출 상환', -a);
     note(st, st.report, propName(p) + ' 대출 상환 ' + fmt(a), 'info');
     syncListings(st);
+    recordHist(st);
     return { ok: true, amount: a };
   }
 
@@ -1129,7 +1144,7 @@
         return c > 0.02 && !activeMods(st).some(function (m) { return m.name === 'ltv'; }) ? 1.5 : 0;
       },
       run: function (st, rep) {
-        addMod(st, { name: 'ltv', value: 0.4, until: st.turn + 12, label: '대출 규제 (LTV 40%)', tone: 'bad' });
+        addMod(st, { name: 'ltv', mult: 0.67, until: st.turn + 12, label: '대출 규제 (LTV 2/3로 축소)', tone: 'bad' });
         addMod(st, { name: 'sale', mult: 0.7, until: st.turn + 6, label: '거래 위축', tone: 'bad' });
         note(st, rep, '정부 대책 발표: 집값 과열로 LTV가 40%로 줄어듭니다(12개월). 거래도 얼어붙습니다.', 'bad', true);
       }
@@ -1140,7 +1155,7 @@
         return c < -0.015 && !activeMods(st).some(function (m) { return m.name === 'ltv'; }) ? 1.5 : 0;
       },
       run: function (st, rep) {
-        addMod(st, { name: 'ltv', value: 0.7, until: st.turn + 12, label: '규제 완화 (LTV 70%)', tone: 'good' });
+        addMod(st, { name: 'ltv', mult: 1.17, until: st.turn + 12, label: '규제 완화 (LTV 1.17배)', tone: 'good' });
         addMod(st, { name: 'sale', mult: 1.3, until: st.turn + 6, label: '거래 활성화', tone: 'good' });
         note(st, rep, '부동산 경기 부양책: LTV가 70%로 늘어납니다(12개월). 매수 문의가 늘었습니다.', 'good', true);
       }
@@ -1229,6 +1244,18 @@
     var p = findProp(st, ev.propId);
     if (p) PROP_EVENTS[ev.key].resolve(st, ev, choiceId, st.report, p);
     syncListings(st);
+    recordHist(st);
+  }
+
+  // 이번 달 상태를 기록 (같은 달에 다시 부르면 덮어쓴다: 매수·사건 처리 후에도 최신으로 유지)
+  function recordHist(st) {
+    var tot = totals(st);
+    var rec = {
+      t: st.turn, net: tot.net, cash: st.cash, value: tot.value, loan: tot.loan, deposit: tot.deposit,
+      pl: (st.report && st.report.t === st.turn ? st.report.ledger : []).reduce(function (a, x) { return a + x.amount; }, 0)
+    };
+    var last = st.hist[st.hist.length - 1];
+    if (last && last.t === st.turn) st.hist[st.hist.length - 1] = rec; else st.hist.push(rec);
   }
 
   /* ---------- 한 달 진행 ---------- */
@@ -1324,7 +1351,7 @@
 
     refreshListings(st);
     var net = netWorth(st);
-    st.hist.push({ t: t, net: net, cash: st.cash });
+    recordHist(st);
     rep.netChange = net - prevNet;
     if (t >= st.turns && !st.over) {
       st.over = true;
@@ -1398,9 +1425,9 @@
     borrow: borrow, repay: repay, maxBorrow: maxBorrow,
     value: value, jeonseValue: jeonseValue, equity: equity, deposit: deposit,
     netWorth: netWorth, totals: totals, market: market, S: S,
-    gameRate: gameRate, depositRate: depositRate, ltv: ltv,
+    gameRate: gameRate, depositRate: depositRate, ltv: ltv, ltvFor: ltvFor, loanLimit: loanLimit,
     pSale: pSale, pTenant: pTenant, leaseTerms: leaseTerms, saleEstimate: saleEstimate,
-    acqTaxRate: acqTaxRate, result: result, propName: propName, listingName: listingName, preview: preview,
+    acqTaxRate: acqTaxRate, result: result, grade: grade, propName: propName, listingName: listingName, preview: preview,
     saleAsk: saleAsk, leaseAsk: leaseAsk, findProp: findProp, projectLabel: projectLabel,
     minCash: minCash, affordable: affordable, cheapestNeed: cheapestNeed, syncListings: syncListings,
     fmt: fmt, pct: pct, ym: ym
